@@ -443,7 +443,30 @@ if user_input:
 
             info = {}
 
+        # Überprüfen, ob Daten geladen wurden
+        if not info or 'longName' not in info:
+            st.error("⚠️ Fehler: Kurse konnten von Yahoo Finance nicht abgerufen werden. Der Ticker ist evtl. temporär gesperrt oder unbekannt.")
+        else:
+            # Stammdaten auslesen
+            company_name = info.get("longName", "Unbekannt")
+            current_price = info.get("currentPrice", info.get("previousClose", np.nan))
+            currency = info.get("currency", "EUR")
+            
+            st.success(f"### {company_name}")
+            
+            # Werte übersichtlich in Spalten anzeigen
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="Aktueller Kurs", value=f"{current_price:.2f} {currency}" if pd.notna(current_price) else "N/A")
+            with col2:
+                st.metric(label="Währungsraum", value=currency)
+            with col3:
+                st.metric(label="Branche", value=info.get("industry", "N/A"))
 
+    except Exception as e:
+        st.error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
+
+        
         # ====================================================
         # PRÜFUNG AUF GÜLTIGEN TITEL
         # ====================================================
