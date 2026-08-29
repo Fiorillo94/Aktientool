@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import re
+import time
 
 
 # ============================================================
@@ -10,7 +10,7 @@ import re
 # ============================================================
 
 st.set_page_config(
-    page_title="Mein Aktien-Bewertungs-Tool",
+    page_title="Mein personalisiertes Aktien-Bewertungs-Tool",
     page_icon="📈",
     layout="wide"
 )
@@ -26,7 +26,7 @@ st.caption(
 # ============================================================
 
 def safe_float(value):
-    """Versucht einen Wert sicher in float umzuwandeln."""
+    """Wandelt einen Wert sicher in float um."""
     try:
         if value is None or pd.isna(value):
             return np.nan
@@ -37,20 +37,16 @@ def safe_float(value):
 
 def get_value(df, possible_rows, column, default=np.nan):
     """
-    Sucht einen Wert anhand mehrerer möglicher Zeilennamen.
-    Das ist wichtig, weil Yahoo Finance die Bezeichnungen
-    einzelner Finanzdaten gelegentlich verändert.
+    Sucht einen Finanzwert anhand mehrerer möglicher
+    Yahoo-Finance-Bezeichnungen.
     """
 
     if df is None or df.empty:
         return default
 
     for row in possible_rows:
-
         try:
-
             if row in df.index and column in df.columns:
-
                 value = df.loc[row, column]
 
                 if pd.notna(value):
@@ -62,124 +58,265 @@ def get_value(df, possible_rows, column, default=np.nan):
     return default
 
 
-def normalize_input(user_input):
-    """
-    Wandelt Firmenname, WKN, ISIN oder Ticker
-    in einen Yahoo-Finance-Ticker um.
-    """
+# ============================================================
+# BEKANNTE TICKER
+# ============================================================
 
-    value = user_input.strip().upper()
+COMPANY_MAP = {
 
     # --------------------------------------------------------
-    # Bekannte deutsche Aktien
+    # Deutschland
     # --------------------------------------------------------
 
-    company_map = {
+    "INNOTEC TSS": "TSS.DE",
+    "INNOTEC": "TSS.DE",
+    "TSS": "TSS.DE",
 
-        "INNOTEC TSS": "TSS.DE",
-        "INNOTEC": "TSS.DE",
-        "TSS": "TSS.DE",
+    "SAP": "SAP.DE",
+    "SIEMENS": "SIE.DE",
+    "ALLIANZ": "ALV.DE",
+    "BMW": "BMW.DE",
 
-        "SAP": "SAP.DE",
-        "SIEMENS": "SIE.DE",
-        "ALLIANZ": "ALV.DE",
-        "BMW": "BMW.DE",
-        "MERCEDES": "MBG.DE",
-        "MERCEDES-BENZ": "MBG.DE",
-        "MERCEDES BENZ": "MBG.DE",
-        "DEUTSCHE TELEKOM": "DTE.DE",
-        "TELEKOM": "DTE.DE",
-        "INFINEON": "IFX.DE",
-        "BASF": "BAS.DE",
-        "ADIDAS": "ADS.DE",
-        "VOLKSWAGEN": "VOW3.DE",
-        "VW": "VOW3.DE",
-        "DEUTSCHE BANK": "DBK.DE",
-        "COMMERZBANK": "CBK.DE",
-        "MUNICH RE": "MUV2.DE",
-        "MÜNCHENER RÜCK": "MUV2.DE",
-        "DEUTSCHE POST": "DHL.DE",
-        "HEIDELBERG MATERIALS": "HEI.DE",
-        "CONTINENTAL": "CON.DE",
-        "HENKEL": "HEN3.DE",
-        "RHEINMETALL": "RHM.DE"
-    }
+    "MERCEDES": "MBG.DE",
+    "MERCEDES-BENZ": "MBG.DE",
+    "MERCEDES BENZ": "MBG.DE",
 
-    if value in company_map:
-        return company_map[value]
+    "DEUTSCHE TELEKOM": "DTE.DE",
+    "TELEKOM": "DTE.DE",
 
+    "INFINEON": "IFX.DE",
+    "BASF": "BAS.DE",
+    "ADIDAS": "ADS.DE",
 
-    # --------------------------------------------------------
-    # ISIN
-    # --------------------------------------------------------
+    "VOLKSWAGEN": "VOW3.DE",
+    "VW": "VOW3.DE",
 
-    isin_map = {
+    "DEUTSCHE BANK": "DBK.DE",
+    "COMMERZBANK": "CBK.DE",
 
-        "DE0005405104": "TSS.DE",
-        "DE0007164600": "SAP.DE",
-        "DE0007236101": "SIE.DE",
-        "DE0008404005": "ALV.DE",
-        "DE0005190003": "BMW.DE",
-        "DE0007100000": "MBG.DE",
-        "DE0005557508": "DTE.DE",
-        "DE0006231004": "IFX.DE",
-        "DE000BASF111": "BAS.DE",
-        "DE000A1EWWW0": "ADS.DE",
-        "DE0007664039": "VOW3.DE",
-        "DE0005140008": "DBK.DE",
-        "DE000CBK1001": "CBK.DE",
-        "DE0008430026": "MUV2.DE",
-        "DE0005552004": "DHL.DE"
-    }
+    "MUNICH RE": "MUV2.DE",
+    "MÜNCHENER RÜCK": "MUV2.DE",
 
-    if value in isin_map:
-        return isin_map[value]
-
+    "DEUTSCHE POST": "DHL.DE",
+    "HEIDELBERG MATERIALS": "HEI.DE",
+    "CONTINENTAL": "CON.DE",
+    "HENKEL": "HEN3.DE",
+    "RHEINMETALL": "RHM.DE",
 
     # --------------------------------------------------------
-    # WKN
+    # USA
     # --------------------------------------------------------
 
-    wkn_map = {
+    "APPLE": "AAPL",
+    "MICROSOFT": "MSFT",
+    "AMAZON": "AMZN",
 
-        "540510": "TSS.DE",
-        "716460": "SAP.DE",
-        "723610": "SIE.DE",
-        "840400": "ALV.DE",
-        "519000": "BMW.DE",
-        "710000": "MBG.DE",
-        "555750": "DTE.DE",
-        "623100": "IFX.DE",
-        "BASF11": "BAS.DE",
-        "A1EWWW": "ADS.DE",
-        "766403": "VOW3.DE",
-        "514000": "DBK.DE",
-        "CBK100": "CBK.DE",
-        "843002": "MUV2.DE",
-        "555200": "DHL.DE"
-    }
+    "ALPHABET": "GOOGL",
+    "GOOGLE": "GOOGL",
 
-    if value in wkn_map:
-        return wkn_map[value]
+    "META": "META",
+    "NVIDIA": "NVDA",
+    "TESLA": "TSLA",
 
+    "PEPSICO": "PEP",
+    "PEPSI": "PEP",
 
-    # --------------------------------------------------------
-    # Bereits vollständiger Yahoo-Ticker
-    # --------------------------------------------------------
+    "COCA COLA": "KO",
+    "COCA-COLA": "KO",
 
-    if "." in value:
-        return value
+    "MCDONALDS": "MCD",
+    "MCDONALD'S": "MCD",
 
+    "JOHNSON & JOHNSON": "JNJ",
+    "JOHNSON JOHNSON": "JNJ",
 
-    # --------------------------------------------------------
-    # Deutscher Ticker ohne Börsenkürzel
-    # --------------------------------------------------------
+    "PROCTER & GAMBLE": "PG",
+    "PROCTER GAMBLE": "PG",
 
-    return f"{value}.DE"
+    "BERKSHIRE HATHAWAY": "BRK-B",
+
+    "VISA": "V",
+    "MASTERCARD": "MA",
+
+    "JPMORGAN": "JPM",
+    "JPMORGAN CHASE": "JPM",
+
+    "EXXON": "XOM",
+    "EXXON MOBIL": "XOM",
+
+    "CHEVRON": "CVX"
+}
 
 
 # ============================================================
-# HISTORISCHE JAHRESENDKURSE
+# WKN / ISIN
+# ============================================================
+
+IDENTIFIER_MAP = {
+
+    # InnoTec TSS
+    "540510": "TSS.DE",
+    "DE0005405104": "TSS.DE",
+
+    # SAP
+    "716460": "SAP.DE",
+    "DE0007164600": "SAP.DE",
+
+    # Siemens
+    "723610": "SIE.DE",
+    "DE0007236101": "SIE.DE",
+
+    # Allianz
+    "840400": "ALV.DE",
+    "DE0008404005": "ALV.DE",
+
+    # BMW
+    "519000": "BMW.DE",
+    "DE0005190003": "BMW.DE",
+
+    # Mercedes-Benz
+    "710000": "MBG.DE",
+    "DE0007100000": "MBG.DE",
+
+    # Deutsche Telekom
+    "555750": "DTE.DE",
+    "DE0005557508": "DTE.DE",
+
+    # Infineon
+    "623100": "IFX.DE",
+    "DE0006231004": "IFX.DE",
+
+    # BASF
+    "BASF11": "BAS.DE",
+    "DE000BASF111": "BAS.DE",
+
+    # Adidas
+    "A1EWWW": "ADS.DE",
+    "DE000A1EWWW0": "ADS.DE",
+
+    # Volkswagen
+    "766403": "VOW3.DE",
+    "DE0007664039": "VOW3.DE",
+
+    # Deutsche Bank
+    "514000": "DBK.DE",
+    "DE0005140008": "DBK.DE",
+
+    # Commerzbank
+    "CBK100": "CBK.DE",
+    "DE000CBK1001": "CBK.DE",
+
+    # Munich Re
+    "843002": "MUV2.DE",
+    "DE0008430026": "MUV2.DE",
+
+    # Deutsche Post / DHL
+    "555200": "DHL.DE",
+    "DE0005552004": "DHL.DE"
+}
+
+
+# ============================================================
+# EINGABE NORMALISIEREN
+# ============================================================
+
+def normalize_input(user_input):
+
+    value = user_input.strip().upper()
+
+    # Bekannter Firmenname
+    if value in COMPANY_MAP:
+        return COMPANY_MAP[value]
+
+    # WKN / ISIN
+    if value in IDENTIFIER_MAP:
+        return IDENTIFIER_MAP[value]
+
+    # Berkshire Hathaway
+    if value in ["BRK.B", "BRK/B"]:
+        return "BRK-B"
+
+    # Bereits Yahoo-Ticker mit Börsenkürzel
+    if "." in value:
+        return value
+
+    # Normalen Ticker unverändert lassen!
+    #
+    # PEP -> PEP
+    # AAPL -> AAPL
+    # MSFT -> MSFT
+    # TSS.DE bleibt TSS.DE
+
+    return value
+
+
+# ============================================================
+# TICKER AUTOMATISCH FINDEN
+# ============================================================
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def find_working_ticker(user_input):
+
+    initial_ticker = normalize_input(user_input)
+
+    candidates = []
+
+    # Erkannten Ticker zuerst testen
+    candidates.append(initial_ticker)
+
+    # Wenn kein Punkt enthalten ist, zusätzlich
+    # typische Börsenplätze testen.
+    #
+    # Wichtig:
+    # Der ursprüngliche Ticker bleibt immer an erster Stelle.
+
+    if "." not in initial_ticker:
+
+        candidates.extend([
+            f"{initial_ticker}.DE",
+            f"{initial_ticker}.F",
+            f"{initial_ticker}.PA",
+            f"{initial_ticker}.MI",
+            f"{initial_ticker}.AS",
+            f"{initial_ticker}.L"
+        ])
+
+    # Duplikate entfernen
+    candidates = list(dict.fromkeys(candidates))
+
+    for ticker in candidates:
+
+        try:
+
+            data = yf.download(
+                ticker,
+                period="5d",
+                interval="1d",
+                auto_adjust=False,
+                actions=False,
+                progress=False,
+                threads=False
+            )
+
+            if (
+                data is not None
+                and not data.empty
+                and "Close" in data.columns
+            ):
+
+                close = data["Close"].dropna()
+
+                if not close.empty:
+                    return ticker
+
+        except Exception:
+            continue
+
+    return None
+
+
+# ============================================================
+# JAHRESENDKURS
 # ============================================================
 
 def get_year_end_price(history, year):
@@ -189,61 +326,34 @@ def get_year_end_price(history, year):
         if history is None or history.empty:
             return np.nan
 
-
         hist = history.copy()
 
-
-        # ----------------------------------------------------
-        # MultiIndex von yfinance entfernen
-        # ----------------------------------------------------
-
-        if isinstance(
-            hist.columns,
-            pd.MultiIndex
-        ):
-
-            hist.columns = (
-                hist.columns
-                .get_level_values(0)
-            )
-
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = hist.columns.get_level_values(0)
 
         if "Close" not in hist.columns:
             return np.nan
-
-
-        # ----------------------------------------------------
-        # Daten des jeweiligen Jahres
-        # ----------------------------------------------------
 
         year_data = hist[
             hist.index.year == year
         ]
 
-
         if year_data.empty:
             return np.nan
-
 
         close_prices = (
             year_data["Close"]
             .dropna()
         )
 
-
         if close_prices.empty:
             return np.nan
 
-
-        # Letzter verfügbarer Börsenkurs
-        # des Jahres
         return float(
             close_prices.iloc[-1]
         )
 
-
     except Exception:
-
         return np.nan
 
 
@@ -258,14 +368,13 @@ def calculate_multiple(price, value):
         and pd.notna(value)
         and value > 0
     ):
-
         return price / value
 
     return np.nan
 
 
 # ============================================================
-# GROWTH SCORE
+# WACHSTUMS-SCORE
 # ============================================================
 
 def growth_score(values, max_points):
@@ -279,24 +388,19 @@ def growth_score(values, max_points):
         .dropna()
     )
 
-
     if len(values) < 2:
         return 0
-
 
     newest = values.iloc[0]
     oldest = values.iloc[-1]
 
-
     if oldest <= 0:
         return 0
-
 
     growth = (
         (newest - oldest)
         / abs(oldest)
     ) * 100
-
 
     if growth >= 50:
         return max_points
@@ -323,7 +427,7 @@ def growth_score(values, max_points):
 
 
 # ============================================================
-# VALUATION SCORE
+# BEWERTUNGS-SCORE
 # ============================================================
 
 def valuation_score(
@@ -338,9 +442,7 @@ def valuation_score(
         or current_multiple <= 0
         or historical_multiple <= 0
     ):
-
         return 0
-
 
     discount = (
         (
@@ -349,7 +451,6 @@ def valuation_score(
         )
         / historical_multiple
     ) * 100
-
 
     if discount >= 30:
         return max_points
@@ -373,23 +474,119 @@ def valuation_score(
 
 
 # ============================================================
-# YAHOO FINANCE DATEN LADEN
+# DCF
 # ============================================================
 
-@st.cache_data(
-    ttl=3600,
-    show_spinner=False
-)
+def calculate_dcf(
+    fcf,
+    shares,
+    net_debt,
+    growth_rate,
+    wacc,
+    terminal_growth,
+    forecast_years
+):
+
+    if (
+        pd.isna(fcf)
+        or fcf <= 0
+        or pd.isna(shares)
+        or shares <= 0
+        or wacc <= terminal_growth
+    ):
+        return np.nan
+
+    forecast_fcfs = []
+
+    for year in range(
+        1,
+        forecast_years + 1
+    ):
+
+        future_fcf = (
+            fcf
+            * (
+                1
+                + growth_rate / 100
+            )
+            ** year
+        )
+
+        forecast_fcfs.append(
+            future_fcf
+        )
+
+    pv_fcfs = sum(
+
+        future_fcf
+        / (
+            1
+            + wacc / 100
+        )
+        ** year
+
+        for year, future_fcf
+        in enumerate(
+            forecast_fcfs,
+            start=1
+        )
+    )
+
+    terminal_fcf = (
+        forecast_fcfs[-1]
+        * (
+            1
+            + terminal_growth / 100
+        )
+    )
+
+    terminal_value = (
+        terminal_fcf
+        / (
+            wacc / 100
+            - terminal_growth / 100
+        )
+    )
+
+    terminal_pv = (
+        terminal_value
+        / (
+            1
+            + wacc / 100
+        )
+        ** forecast_years
+    )
+
+    enterprise_value = (
+        pv_fcfs
+        + terminal_pv
+    )
+
+    equity_value = (
+        enterprise_value
+        - net_debt
+    )
+
+    return (
+        equity_value
+        / shares
+    )
+
+
+# ============================================================
+# KOMPLETTE YAHOO-DATEN
+# ============================================================
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_market_data(ticker_symbol):
 
     share = yf.Ticker(
         ticker_symbol
     )
 
-
     # --------------------------------------------------------
     # Historische Kurse
-    # EIN Request für sechs Jahre
+    # Ein einziger Download für 6 Jahre
     # --------------------------------------------------------
 
     history = yf.download(
@@ -402,7 +599,6 @@ def load_market_data(ticker_symbol):
         threads=False
     )
 
-
     # --------------------------------------------------------
     # Finanzdaten
     # --------------------------------------------------------
@@ -412,7 +608,6 @@ def load_market_data(ticker_symbol):
     balance_sheet = share.balance_sheet
 
     cashflow = share.cashflow
-
 
     # --------------------------------------------------------
     # Dividenden
@@ -444,7 +639,6 @@ def load_market_data(ticker_symbol):
             dtype=float
         )
 
-
     return {
         "history": history,
         "financials": financials,
@@ -455,124 +649,6 @@ def load_market_data(ticker_symbol):
 
 
 # ============================================================
-# DCF
-# ============================================================
-
-def calculate_dcf(
-    fcf,
-    shares,
-    net_debt,
-    growth_rate,
-    wacc,
-    terminal_growth,
-    forecast_years
-):
-
-    if (
-        pd.isna(fcf)
-        or fcf <= 0
-        or pd.isna(shares)
-        or shares <= 0
-        or wacc <= terminal_growth
-    ):
-
-        return np.nan
-
-
-    forecast_fcfs = []
-
-
-    for year in range(
-        1,
-        forecast_years + 1
-    ):
-
-        future_fcf = (
-            fcf
-            * (
-                1
-                + growth_rate / 100
-            )
-            ** year
-        )
-
-        forecast_fcfs.append(
-            future_fcf
-        )
-
-
-    # --------------------------------------------------------
-    # Barwert der prognostizierten FCFs
-    # --------------------------------------------------------
-
-    pv_fcfs = sum(
-
-        future_fcf
-        / (
-            1
-            + wacc / 100
-        )
-        ** year
-
-        for year, future_fcf
-        in enumerate(
-            forecast_fcfs,
-            start=1
-        )
-    )
-
-
-    # --------------------------------------------------------
-    # Terminal Value
-    # --------------------------------------------------------
-
-    terminal_fcf = (
-        forecast_fcfs[-1]
-        * (
-            1
-            + terminal_growth / 100
-        )
-    )
-
-
-    terminal_value = (
-        terminal_fcf
-        / (
-            wacc / 100
-            - terminal_growth / 100
-        )
-    )
-
-
-    terminal_pv = (
-        terminal_value
-        / (
-            1
-            + wacc / 100
-        )
-        ** forecast_years
-    )
-
-
-    enterprise_value = (
-        pv_fcfs
-        + terminal_pv
-    )
-
-
-    equity_value = (
-        enterprise_value
-        - net_debt
-    )
-
-
-    return (
-        equity_value
-        / shares
-    )
-
-
-# ============================================================
 # SIDEBAR
 # ============================================================
 
@@ -580,14 +656,12 @@ st.sidebar.header(
     "⚙️ DCF-Annahmen"
 )
 
-
 forecast_years = st.sidebar.slider(
     "Prognosezeitraum",
     min_value=3,
     max_value=10,
     value=5
 )
-
 
 growth_rate = st.sidebar.slider(
     "FCF-Wachstum (%)",
@@ -597,7 +671,6 @@ growth_rate = st.sidebar.slider(
     step=0.5
 )
 
-
 wacc = st.sidebar.slider(
     "WACC (%)",
     min_value=5.0,
@@ -606,7 +679,6 @@ wacc = st.sidebar.slider(
     step=0.25
 )
 
-
 terminal_growth = st.sidebar.slider(
     "Terminal Growth (%)",
     min_value=0.0,
@@ -614,7 +686,6 @@ terminal_growth = st.sidebar.slider(
     value=2.5,
     step=0.25
 )
-
 
 margin_of_safety = st.sidebar.slider(
     "Sicherheitsmarge (%)",
@@ -626,7 +697,7 @@ margin_of_safety = st.sidebar.slider(
 
 
 # ============================================================
-# AKTIEN-EINGABE
+# AKTIENEINGABE
 # ============================================================
 
 user_input = st.text_input(
@@ -637,13 +708,37 @@ user_input = st.text_input(
 
 if user_input:
 
-    ticker_symbol = normalize_input(
-        user_input
-    )
+    # ========================================================
+    # TICKER FINDEN
+    # ========================================================
+
+    with st.spinner(
+        "Suche Aktie..."
+    ):
+
+        ticker_symbol = find_working_ticker(
+            user_input
+        )
 
 
-    st.info(
-        f"Erkannter Yahoo-Finance-Ticker: "
+    if ticker_symbol is None:
+
+        st.error(
+            "⚠️ Die Aktie konnte bei Yahoo Finance "
+            "nicht gefunden werden."
+        )
+
+        st.info(
+            "Versuche beispielsweise den Yahoo-Ticker "
+            "direkt einzugeben, z. B. AAPL, PEP, SAP.DE "
+            "oder TSS.DE."
+        )
+
+        st.stop()
+
+
+    st.success(
+        f"Yahoo-Finance-Ticker erkannt: "
         f"**{ticker_symbol}**"
     )
 
@@ -662,11 +757,9 @@ if user_input:
                 ticker_symbol
             )
 
-
     except Exception as e:
 
         error_text = str(e).lower()
-
 
         if (
             "too many requests"
@@ -679,15 +772,14 @@ if user_input:
 
             st.error(
                 "⚠️ Yahoo Finance hat die Anfrage "
-                "vorübergehend wegen zu vieler "
-                "Anfragen blockiert."
+                "wegen zu vieler Anfragen vorübergehend "
+                "blockiert."
             )
 
             st.info(
                 "Bitte einige Minuten warten. "
                 "Die Anwendung verwendet Caching, "
-                "damit zukünftige Analysen weniger "
-                "Anfragen verursachen."
+                "um die Anzahl der Anfragen zu reduzieren."
             )
 
         else:
@@ -698,12 +790,11 @@ if user_input:
 
             st.exception(e)
 
-
         st.stop()
 
 
     # ========================================================
-    # DATEN AUSLESEN
+    # DATEN
     # ========================================================
 
     history = data["history"]
@@ -718,10 +809,13 @@ if user_input:
 
 
     # ========================================================
-    # KURS PRÜFEN
+    # HISTORISCHE KURSE PRÜFEN
     # ========================================================
 
-    if history is None or history.empty:
+    if (
+        history is None
+        or history.empty
+    ):
 
         st.error(
             "⚠️ Kurse konnten von Yahoo Finance "
@@ -776,9 +870,6 @@ if user_input:
     # UNTERNEHMENSINFORMATIONEN
     # ========================================================
 
-    # info wird bewusst erst hier abgefragt
-    # und nicht zum grundlegenden Laden benötigt.
-
     try:
 
         share = yf.Ticker(
@@ -800,7 +891,7 @@ if user_input:
 
     currency = info.get(
         "currency",
-        "EUR"
+        "USD"
     )
 
 
@@ -897,17 +988,19 @@ if user_input:
 
         st.warning(
             "⚠️ Dieser Titel ist ein kleinerer "
-            "Nebenwert. Bei solchen Aktien können "
-            "Handelsvolumen, Spreads und die "
-            "Datenqualität geringer sein."
+            "Nebenwert. Handelsvolumen, Spreads und "
+            "Datenqualität können geringer sein."
         )
 
 
     # ========================================================
-    # HISTORISCHE JAHRE
+    # FINANZDATEN PRÜFEN
     # ========================================================
 
-    if financials is None or financials.empty:
+    if (
+        financials is None
+        or financials.empty
+    ):
 
         st.error(
             "Yahoo Finance liefert keine "
@@ -918,7 +1011,6 @@ if user_input:
 
 
     years = financials.columns[:5]
-
 
     data_list = []
 
@@ -933,7 +1025,7 @@ if user_input:
 
 
         # ----------------------------------------------------
-        # GUV
+        # UMSATZ
         # ----------------------------------------------------
 
         sales = get_value(
@@ -946,6 +1038,10 @@ if user_input:
         )
 
 
+        # ----------------------------------------------------
+        # NETTOGEWINN
+        # ----------------------------------------------------
+
         net_income = get_value(
             financials,
             [
@@ -957,7 +1053,7 @@ if user_input:
 
 
         # ----------------------------------------------------
-        # BILANZ
+        # EIGENKAPITAL
         # ----------------------------------------------------
 
         equity = get_value(
@@ -971,6 +1067,10 @@ if user_input:
         )
 
 
+        # ----------------------------------------------------
+        # SCHULDEN
+        # ----------------------------------------------------
+
         total_debt = get_value(
             balance_sheet,
             [
@@ -980,6 +1080,10 @@ if user_input:
             year
         )
 
+
+        # ----------------------------------------------------
+        # CASH
+        # ----------------------------------------------------
 
         cash = get_value(
             balance_sheet,
@@ -991,6 +1095,10 @@ if user_input:
         )
 
 
+        # ----------------------------------------------------
+        # FORDERUNGEN
+        # ----------------------------------------------------
+
         receivables = get_value(
             balance_sheet,
             [
@@ -1001,6 +1109,10 @@ if user_input:
         )
 
 
+        # ----------------------------------------------------
+        # UMLAUFVERMÖGEN
+        # ----------------------------------------------------
+
         current_assets = get_value(
             balance_sheet,
             [
@@ -1009,6 +1121,10 @@ if user_input:
             year
         )
 
+
+        # ----------------------------------------------------
+        # KURZFRISTIGE VERBINDLICHKEITEN
+        # ----------------------------------------------------
 
         current_liabilities = get_value(
             balance_sheet,
@@ -1020,7 +1136,7 @@ if user_input:
 
 
         # ----------------------------------------------------
-        # CASHFLOW
+        # FREE CASHFLOW
         # ----------------------------------------------------
 
         free_cashflow = get_value(
@@ -1033,7 +1149,7 @@ if user_input:
 
 
         # ----------------------------------------------------
-        # FALLBACK FÜR FREE CASHFLOW
+        # FCF FALLBACK
         # ----------------------------------------------------
 
         if pd.isna(
@@ -1180,6 +1296,9 @@ if user_input:
         # DIVIDENDE PRO AKTIE
         # ----------------------------------------------------
 
+        dividend_ps = 0.0
+
+
         if (
             dividends is not None
             and not dividends.empty
@@ -1194,17 +1313,16 @@ if user_input:
                     ]
                 )
 
-                dividend_ps = (
-                    year_dividends.sum()
-                )
+
+                if not year_dividends.empty:
+
+                    dividend_ps = float(
+                        year_dividends.sum()
+                    )
 
             except Exception:
 
-                dividend_ps = 0
-
-        else:
-
-            dividend_ps = 0
+                dividend_ps = 0.0
 
 
         # ----------------------------------------------------
@@ -1254,7 +1372,7 @@ if user_input:
 
 
         # ----------------------------------------------------
-        # LIQUIDITÄTSGRADE
+        # LIQUIDITÄT
         # ----------------------------------------------------
 
         if (
@@ -1390,7 +1508,7 @@ if user_input:
 
 
         # ----------------------------------------------------
-        # DATENSATZ
+        # DATENZEILE
         # ----------------------------------------------------
 
         data_list.append({
@@ -1699,23 +1817,17 @@ if user_input:
     )
 
 
-    # --------------------------------------------------------
-    # Jüngster FCF
-    # --------------------------------------------------------
-
     ttm_fcf = np.nan
 
 
     try:
 
-        if not df.empty:
-
-            ttm_fcf = (
-                latest[
-                    "Free Cashflow (Mrd.)"
-                ]
-                * 1e9
-            )
+        ttm_fcf = (
+            latest[
+                "Free Cashflow (Mrd.)"
+            ]
+            * 1e9
+        )
 
     except Exception:
 
@@ -1816,7 +1928,7 @@ if user_input:
 
 
     # --------------------------------------------------------
-    # DCF berechnen
+    # DCF
     # --------------------------------------------------------
 
     dcf_per_share = calculate_dcf(
@@ -1899,10 +2011,6 @@ if user_input:
         "🏆 Fundamentaler Score"
     )
 
-
-    # --------------------------------------------------------
-    # Wachstum
-    # --------------------------------------------------------
 
     score_revenue = growth_score(
         df["Umsatz (Mrd.)"],
@@ -2223,7 +2331,7 @@ if user_input:
 
 
     # --------------------------------------------------------
-    # Gesamt
+    # GESAMTSCORE
     # --------------------------------------------------------
 
     total_score = (
@@ -2256,7 +2364,7 @@ if user_input:
 
 
     # --------------------------------------------------------
-    # Bewertung
+    # BEWERTUNG
     # --------------------------------------------------------
 
     if normalized_score >= 85:
@@ -2358,7 +2466,7 @@ if user_input:
 
 
     # ========================================================
-    # DCF SENSITIVITÄT
+    # DCF-SENSITIVITÄT
     # ========================================================
 
     if (
@@ -2524,7 +2632,7 @@ if user_input:
 
 
     # ========================================================
-    # ABSCHLUSS
+    # ZUSAMMENFASSUNG
     # ========================================================
 
     st.subheader(
@@ -2563,7 +2671,6 @@ if user_input:
     st.caption(
         "⚠️ Hinweis: Dieses Tool dient ausschließlich "
         "der Analyse und stellt keine Anlageberatung dar. "
-        "Insbesondere bei kleineren Nebenwerten können "
-        "Daten von Yahoo Finance unvollständig oder "
-        "zeitlich verzögert sein."
+        "Yahoo-Finance-Daten können unvollständig, "
+        "verzögert oder fehlerhaft sein."
     )
