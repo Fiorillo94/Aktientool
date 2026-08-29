@@ -419,27 +419,41 @@ if user_input:
     st.info(f"🔎 Erkannter Yahoo-Finance-Ticker: **{ticker_symbol}**")
 
     try:
-        share = yf.Ticker(ticker_symbol)
+        # Erstellt eine Browser-Sitzung, um die Cloud-Blockade von Yahoo zu umgehen
+        import requests
+        import random
         
-        # 1. Sicherste Methode: Letzten Handelstag abrufen (Umgreift Server-Blockaden)
+        # Liste echter Browser-Signaturen
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        ]
+        
+        session = requests.Session()
+        session.headers.update({'User-Agent': random.choice(user_agents)})
+        
+        # Ticker mit der Browser-Sitzung starten
+        share = yf.Ticker(ticker_symbol, session=session)
+        
+        # Kurs abrufen
         hist = share.history(period="1d")
         
-        # FALLBACK: Falls .DE fehlschlägt, probieren wir das US-Kürzel ohne .DE
+        # FALLBACK: Falls der regionale Ticker (.DE) blockiert wird, testen wir die US-Variante
         if hist.empty and ".DE" in ticker_symbol:
             us_ticker = ticker_symbol.replace(".DE", "")
-            share = yf.Ticker(us_ticker)
+            share = yf.Ticker(us_ticker, session=session)
             hist = share.history(period="1d")
             if not hist.empty:
                 ticker_symbol = us_ticker
-                st.warning(f"⚠️ Regionaler Ticker blockiert. Automatisch auf US-Hauptticker gewechselt: **{ticker_symbol}**")
+                st.warning(f"⚠️ Regionaler Ticker im System verzögert. Automatisch auf Hauptticker gewechselt: **{ticker_symbol}**")
 
         if hist.empty:
-            st.error("⚠️ Fehler: Kurse konnten von Yahoo Finance nicht abgerufen werden. Der Ticker ist evtl. temporär gesperrt oder unbekannt.")
+            st.error("⚠️ Yahoo Finance blockiert aktuell die Cloud-Server-Anfrage. Bitte versuchen Sie es in wenigen Minuten erneut oder geben Sie den reinen US-Ticker ein.")
         else:
-            # Kurs aus der Historie auslesen
             current_price = float(hist["Close"].iloc[-1])
             
-            # Währung und Namen über info versuchen (mit sicherem Fallback)
             try:
                 info = share.info
                 company_name = info.get("longName", ticker_symbol)
@@ -450,7 +464,7 @@ if user_input:
                 currency = "USD" if ".DE" not in ticker_symbol else "EUR"
                 industry = "N/A"
             
-            # Oberfläche im Browser zeichnen
+            # Oberfläche im Browser anzeigen
             st.success(f"### {company_name}")
             
             col1, col2, col3 = st.columns(3)
