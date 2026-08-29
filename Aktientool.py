@@ -414,31 +414,20 @@ user_input = st.text_input(
 
 if user_input:
 
-    ticker_symbol = normalize_input(
-        user_input
-    )
+    ticker_symbol = normalize_input(user_input)
 
-    st.info(
-        f"🔎 Erkannter Yahoo-Finance-Ticker: "
-        f"**{ticker_symbol}**"
-    )
+    st.info(f"🔎 Erkannter Yahoo-Finance-Ticker: **{ticker_symbol}**")
 
-
-            # Ticker-Objekt erstellen
+    try:
         share = yf.Ticker(ticker_symbol)
-        
-        # 1. Schnelle Kerndaten abrufen (Verhindert Blockaden)
         fast_info = share.fast_info
         
-        # Prüfen, ob Kursdaten existieren
         if not fast_info or 'last_price' not in fast_info:
             st.error("⚠️ Fehler: Kurse konnten von Yahoo Finance nicht abgerufen werden. Der Ticker ist evtl. temporär gesperrt oder unbekannt.")
         else:
-            # 2. Kurs und Währung aus schnellen Daten lesen
             current_price = fast_info.get("last_price", np.nan)
             currency = fast_info.get("currency", "EUR")
             
-            # 3. Firmennamen separat abfragen (mit Absicherung)
             try:
                 info = share.info
                 company_name = info.get("longName", ticker_symbol)
@@ -447,7 +436,6 @@ if user_input:
                 company_name = ticker_symbol
                 industry = "N/A"
             
-            # Oberfläche zeichnen
             st.success(f"### {company_name}")
             
             col1, col2, col3 = st.columns(3)
@@ -463,7 +451,7 @@ if user_input:
     except Exception as e:
         st.error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
 
-
+        
         # ====================================================
         # YAHOO FINANCE
         # ====================================================
