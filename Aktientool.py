@@ -424,7 +424,45 @@ if user_input:
     )
 
 
-    try:
+            # Ticker-Objekt erstellen
+        share = yf.Ticker(ticker_symbol)
+        
+        # 1. Schnelle Kerndaten abrufen (Verhindert Blockaden)
+        fast_info = share.fast_info
+        
+        # Prüfen, ob Kursdaten existieren
+        if not fast_info or 'last_price' not in fast_info:
+            st.error("⚠️ Fehler: Kurse konnten von Yahoo Finance nicht abgerufen werden. Der Ticker ist evtl. temporär gesperrt oder unbekannt.")
+        else:
+            # 2. Kurs und Währung aus schnellen Daten lesen
+            current_price = fast_info.get("last_price", np.nan)
+            currency = fast_info.get("currency", "EUR")
+            
+            # 3. Firmennamen separat abfragen (mit Absicherung)
+            try:
+                info = share.info
+                company_name = info.get("longName", ticker_symbol)
+                industry = info.get("industry", "N/A")
+            except Exception:
+                company_name = ticker_symbol
+                industry = "N/A"
+            
+            # Oberfläche zeichnen
+            st.success(f"### {company_name}")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(label="Aktueller Kurs", value=f"{current_price:.2f} {currency}" if pd.notna(current_price) else "N/A")
+            with col2:
+                st.metric(label="Währungsraum", value=currency)
+            with col3:
+                st.metric(label="Branche", value=industry)
+                
+            st.write("Die Fundamentalanalyse und das DCF-Modell können nun auf Basis dieser Daten berechnet werden.")
+
+    except Exception as e:
+        st.error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
+
 
         # ====================================================
         # YAHOO FINANCE
