@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import time
 
 
 # ============================================================
@@ -10,7 +9,7 @@ import time
 # ============================================================
 
 st.set_page_config(
-    page_title="Mein Aktien-Bewertungs-Tool",
+    page_title="Mein personalisiertes Aktien-Bewertungs-Tool",
     page_icon="📈",
     layout="wide"
 )
@@ -45,11 +44,8 @@ def get_row_value(df, rows, column):
         return np.nan
 
     for row in rows:
-
         try:
-
             if row in df.index and column in df.columns:
-
                 value = df.loc[row, column]
 
                 if pd.notna(value):
@@ -61,44 +57,23 @@ def get_row_value(df, rows, column):
     return np.nan
 
 
-def clean_columns(df):
-    """Bereinigt MultiIndex-Spalten von yfinance."""
-
-    if df is None or df.empty:
-        return df
-
-    result = df.copy()
-
-    if isinstance(result.columns, pd.MultiIndex):
-
-        result.columns = [
-            col[0] if isinstance(col, tuple) else col
-            for col in result.columns
-        ]
-
-    return result
-
-
 # ============================================================
-# FIRMA / TICKER / WKN / ISIN
+# FIRMANAMEN -> YAHOO-TICKER
 # ============================================================
 
 COMPANY_MAP = {
 
-    # ========================================================
+    # --------------------------------------------------------
     # DEUTSCHLAND
-    # ========================================================
+    # --------------------------------------------------------
 
     "INNOTEC TSS": "TSS.DE",
     "INNOTEC": "TSS.DE",
     "TSS": "TSS.DE",
 
     "SAP": "SAP.DE",
-
     "SIEMENS": "SIE.DE",
-
     "ALLIANZ": "ALV.DE",
-
     "BMW": "BMW.DE",
 
     "MERCEDES": "MBG.DE",
@@ -109,62 +84,44 @@ COMPANY_MAP = {
     "TELEKOM": "DTE.DE",
 
     "INFINEON": "IFX.DE",
-
     "BASF": "BAS.DE",
-
     "ADIDAS": "ADS.DE",
 
     "VOLKSWAGEN": "VOW3.DE",
     "VW": "VOW3.DE",
 
     "DEUTSCHE BANK": "DBK.DE",
-
     "COMMERZBANK": "CBK.DE",
 
     "MUNICH RE": "MUV2.DE",
     "MÜNCHENER RÜCK": "MUV2.DE",
 
     "DEUTSCHE POST": "DHL.DE",
-
     "HEIDELBERG MATERIALS": "HEI.DE",
-
     "CONTINENTAL": "CON.DE",
-
     "HENKEL": "HEN3.DE",
-
     "RHEINMETALL": "RHM.DE",
-
     "FRESENIUS": "FRE.DE",
-
     "E.ON": "EOAN.DE",
-
     "VONOVIA": "VNA.DE",
-
     "PUMA": "PUM.DE",
-
     "BEIERSDORF": "BEI.DE",
-
     "MERCK": "MRK.DE",
-
     "QIAGEN": "QIA.DE",
 
-    # ========================================================
+    # --------------------------------------------------------
     # USA
-    # ========================================================
+    # --------------------------------------------------------
 
     "APPLE": "AAPL",
-
     "MICROSOFT": "MSFT",
-
     "AMAZON": "AMZN",
 
     "ALPHABET": "GOOGL",
     "GOOGLE": "GOOGL",
 
     "META": "META",
-
     "NVIDIA": "NVDA",
-
     "TESLA": "TSLA",
 
     "PEPSICO": "PEP",
@@ -185,7 +142,6 @@ COMPANY_MAP = {
     "BERKSHIRE HATHAWAY": "BRK-B",
 
     "VISA": "V",
-
     "MASTERCARD": "MA",
 
     "JPMORGAN": "JPM",
@@ -195,27 +151,18 @@ COMPANY_MAP = {
     "EXXON MOBIL": "XOM",
 
     "CHEVRON": "CVX",
-
     "COSTCO": "COST",
-
     "WALMART": "WMT",
-
-    "MCDONALD'S": "MCD",
-
     "NIKE": "NKE",
-
     "ADOBE": "ADBE",
-
     "BROADCOM": "AVGO",
-
     "INTEL": "INTC",
-
     "AMD": "AMD"
 }
 
 
 # ============================================================
-# WKN / ISIN
+# WKN / ISIN -> YAHOO-TICKER
 # ============================================================
 
 IDENTIFIER_MAP = {
@@ -240,7 +187,7 @@ IDENTIFIER_MAP = {
     "519000": "BMW.DE",
     "DE0005190003": "BMW.DE",
 
-    # Mercedes
+    # Mercedes-Benz
     "710000": "MBG.DE",
     "DE0007100000": "MBG.DE",
 
@@ -283,6 +230,10 @@ IDENTIFIER_MAP = {
 
 
 def normalize_input(user_input):
+    """
+    Ermittelt aus Firmenname, Ticker, WKN oder ISIN
+    den Yahoo-Finance-Ticker.
+    """
 
     value = (
         user_input
@@ -290,37 +241,36 @@ def normalize_input(user_input):
         .upper()
     )
 
-    # Firmenname
     if value in COMPANY_MAP:
         return COMPANY_MAP[value]
 
-    # WKN / ISIN
     if value in IDENTIFIER_MAP:
         return IDENTIFIER_MAP[value]
 
-    # Berkshire Hathaway
-    if value in [
-        "BRK.B",
-        "BRK/B"
-    ]:
+    # Berkshire Hathaway Sonderfall
+    if value in ["BRK.B", "BRK/B"]:
         return "BRK-B"
 
-    # Bereits vollständiger Yahoo-Ticker
+    # Wenn bereits ein Börsenplatz angegeben ist,
+    # nichts verändern.
     if "." in value:
         return value
 
-    # Wichtig:
-    # Normale Ticker NICHT automatisch verändern.
+    # Normale Ticker unverändert übernehmen.
     #
-    # PEP -> PEP
     # AAPL -> AAPL
+    # PEP -> PEP
     # MSFT -> MSFT
 
     return value
 
 
 # ============================================================
-# YAHOO-DATEN LADEN
+# DATEN LADEN
+#
+# WICHTIG:
+# Das yf.Ticker-Objekt wird NICHT zurückgegeben.
+# Dadurch funktioniert st.cache_data.
 # ============================================================
 
 @st.cache_data(
@@ -329,46 +279,32 @@ def normalize_input(user_input):
 )
 def load_data(ticker_symbol):
 
-    ticker = yf.Ticker(
-        ticker_symbol
-    )
+    ticker = yf.Ticker(ticker_symbol)
 
-    # --------------------------------------------------------
     # Historische Kurse
-    # --------------------------------------------------------
-
     history = ticker.history(
         period="6y",
         interval="1d",
         auto_adjust=False
     )
 
-    # --------------------------------------------------------
-    # Fundamentaldaten
-    # --------------------------------------------------------
-
+    # Gewinn- und Verlustrechnung
     income_stmt = ticker.income_stmt
 
+    # Bilanz
     balance_sheet = ticker.balance_sheet
 
+    # Cashflow
     cashflow = ticker.cashflow
 
-    # --------------------------------------------------------
     # Dividenden
-    # --------------------------------------------------------
-
     try:
-
         dividends = ticker.dividends
-
     except Exception:
+        dividends = pd.Series(dtype=float)
 
-        dividends = pd.Series(
-            dtype=float
-        )
-
+    # Nur serialisierbare Daten zurückgeben.
     return {
-        "ticker": ticker,
         "history": history,
         "income_stmt": income_stmt,
         "balance_sheet": balance_sheet,
@@ -378,36 +314,30 @@ def load_data(ticker_symbol):
 
 
 # ============================================================
-# HISTORISCHER JAHRESENDKURS
+# JAHRESENDKURS
 # ============================================================
 
-def get_year_end_price(
-    history,
-    year
-):
+def get_year_end_price(history, year):
+    """
+    Ermittelt den letzten verfügbaren Schlusskurs
+    des jeweiligen Kalenderjahres.
 
-    if (
-        history is None
-        or history.empty
-    ):
+    Beispiel:
+    2025 -> letzter Börsentag 2025
+    """
+
+    if history is None or history.empty:
         return np.nan
 
     try:
 
         data = history.copy()
 
-        data.index = pd.to_datetime(
-            data.index
-        )
+        data.index = pd.to_datetime(data.index)
 
         # Zeitzone entfernen
         try:
-
-            data.index = (
-                data.index
-                .tz_localize(None)
-            )
-
+            data.index = data.index.tz_localize(None)
         except Exception:
             pass
 
@@ -426,9 +356,7 @@ def get_year_end_price(
         if close.empty:
             return np.nan
 
-        return float(
-            close.iloc[-1]
-        )
+        return float(close.iloc[-1])
 
     except Exception:
 
@@ -439,21 +367,14 @@ def get_year_end_price(
 # MULTIPLE
 # ============================================================
 
-def multiple(
-    price,
-    per_share_value
-):
+def calculate_multiple(price, value_per_share):
 
     if (
         pd.notna(price)
-        and pd.notna(per_share_value)
-        and per_share_value > 0
+        and pd.notna(value_per_share)
+        and value_per_share > 0
     ):
-
-        return (
-            price
-            / per_share_value
-        )
+        return price / value_per_share
 
     return np.nan
 
@@ -462,10 +383,7 @@ def multiple(
 # GRAHAM
 # ============================================================
 
-def graham_value(
-    eps,
-    bvps
-):
+def calculate_graham(eps, bvps):
 
     if (
         pd.notna(eps)
@@ -502,37 +420,26 @@ def calculate_dcf(
         or fcf <= 0
         or pd.isna(shares)
         or shares <= 0
-        or wacc <= terminal_growth
     ):
-
         return np.nan
 
-    growth = (
-        growth_rate / 100
-    )
+    growth = growth_rate / 100
+    discount = wacc / 100
+    terminal = terminal_growth / 100
 
-    discount = (
-        wacc / 100
-    )
-
-    terminal = (
-        terminal_growth / 100
-    )
+    # WACC muss über dem Terminal Growth liegen.
+    if discount <= terminal:
+        return np.nan
 
     pv = 0
 
     forecast = []
 
-    for year in range(
-        1,
-        years + 1
-    ):
+    for year in range(1, years + 1):
 
         future_fcf = (
             fcf
-            * (
-                1 + growth
-            ) ** year
+            * (1 + growth) ** year
         )
 
         forecast.append(
@@ -541,31 +448,22 @@ def calculate_dcf(
 
         pv += (
             future_fcf
-            / (
-                1 + discount
-            ) ** year
+            / (1 + discount) ** year
         )
 
     terminal_fcf = (
         forecast[-1]
-        * (
-            1 + terminal
-        )
+        * (1 + terminal)
     )
 
     terminal_value = (
         terminal_fcf
-        / (
-            discount
-            - terminal
-        )
+        / (discount - terminal)
     )
 
     terminal_pv = (
         terminal_value
-        / (
-            1 + discount
-        ) ** years
+        / (1 + discount) ** years
     )
 
     enterprise_value = (
@@ -578,20 +476,14 @@ def calculate_dcf(
         - net_debt
     )
 
-    return (
-        equity_value
-        / shares
-    )
+    return equity_value / shares
 
 
 # ============================================================
-# WACHSTUMS-SCORE
+# GROWTH SCORE
 # ============================================================
 
-def growth_score(
-    values,
-    maximum
-):
+def calculate_growth_score(values, maximum):
 
     values = (
         pd.Series(values)
@@ -612,10 +504,7 @@ def growth_score(
         return 0
 
     growth = (
-        (
-            newest
-            - oldest
-        )
+        (newest - oldest)
         / abs(oldest)
     ) * 100
 
@@ -647,7 +536,7 @@ def growth_score(
 # VALUATION SCORE
 # ============================================================
 
-def valuation_score(
+def calculate_valuation_score(
     current,
     historical,
     maximum
@@ -662,10 +551,7 @@ def valuation_score(
         return 0
 
     difference = (
-        (
-            historical
-            - current
-        )
+        (historical - current)
         / historical
     ) * 100
 
@@ -694,9 +580,7 @@ def valuation_score(
 # SIDEBAR
 # ============================================================
 
-st.sidebar.header(
-    "⚙️ DCF-Annahmen"
-)
+st.sidebar.header("⚙️ DCF-Annahmen")
 
 forecast_years = st.sidebar.slider(
     "Prognosezeitraum",
@@ -739,7 +623,7 @@ margin_of_safety = st.sidebar.slider(
 
 
 # ============================================================
-# EINGABE
+# AKTIEN-EINGABE
 # ============================================================
 
 user_input = st.text_input(
@@ -755,7 +639,8 @@ if user_input:
     )
 
     st.info(
-        f"Erkannter Yahoo-Finance-Ticker: **{ticker_symbol}**"
+        f"Erkannter Yahoo-Finance-Ticker: "
+        f"**{ticker_symbol}**"
     )
 
 
@@ -778,12 +663,9 @@ if user_input:
         error_text = str(e).lower()
 
         if (
-            "too many requests"
-            in error_text
-            or "rate limit"
-            in error_text
-            or "429"
-            in error_text
+            "too many requests" in error_text
+            or "rate limit" in error_text
+            or "429" in error_text
         ):
 
             st.error(
@@ -791,9 +673,9 @@ if user_input:
                 "wegen eines Rate-Limits abgelehnt."
             )
 
-            st.warning(
+            st.info(
                 "Bitte einige Minuten warten und "
-                "danach die Seite neu laden."
+                "anschließend die Seite neu laden."
             )
 
         else:
@@ -810,10 +692,8 @@ if user_input:
 
 
     # ========================================================
-    # DATEN
+    # DATEN AUS CACHE
     # ========================================================
-
-    ticker = data["ticker"]
 
     history = data["history"]
 
@@ -824,6 +704,15 @@ if user_input:
     cashflow = data["cashflow"]
 
     dividends = data["dividends"]
+
+
+    # ========================================================
+    # TICKER-OBJEKT NICHT CACHEN
+    # ========================================================
+
+    ticker = yf.Ticker(
+        ticker_symbol
+    )
 
 
     # ========================================================
@@ -841,8 +730,9 @@ if user_input:
         )
 
         st.info(
-            "Prüfe den Yahoo-Ticker. "
-            "Beispiele: AAPL, PEP, SAP.DE, TSS.DE"
+            "Beispiele für gültige Eingaben: "
+            "AAPL, PEP, SAP.DE, TSS.DE, "
+            "InnoTec TSS, 540510"
         )
 
         st.stop()
@@ -869,7 +759,7 @@ if user_input:
 
 
     # ========================================================
-    # INFO
+    # TICKER-INFOS
     # ========================================================
 
     try:
@@ -883,7 +773,10 @@ if user_input:
 
     company_name = info.get(
         "longName",
-        ticker_symbol
+        info.get(
+            "shortName",
+            ticker_symbol
+        )
     )
 
     currency = info.get(
@@ -910,7 +803,7 @@ if user_input:
 
 
     # ========================================================
-    # KOPF
+    # UNTERNEHMENSKOPF
     # ========================================================
 
     st.subheader(
@@ -1117,10 +1010,7 @@ if user_input:
         )
 
 
-        # ----------------------------------------------------
-        # FALLBACK FCF
-        # ----------------------------------------------------
-
+        # Fallback: Operating Cashflow + Capex
         if pd.isna(fcf):
 
             operating_cf = get_row_value(
@@ -1444,7 +1334,7 @@ if user_input:
 
 
         # ====================================================
-        # JAHRESENDKURS
+        # HISTORISCHER JAHRESENDKURS
         # ====================================================
 
         year_end_price = (
@@ -1456,32 +1346,32 @@ if user_input:
 
 
         # ====================================================
-        # HISTORISCHE MULTIPLES
+        # HISTORISCHE KGV / KCV / KBV / KUV
         # ====================================================
 
-        kgv = multiple(
+        kgv = calculate_multiple(
             year_end_price,
             eps
         )
 
-        kcv = multiple(
+        kcv = calculate_multiple(
             year_end_price,
             fcf_ps
         )
 
-        kbv = multiple(
+        kbv = calculate_multiple(
             year_end_price,
             bvps
         )
 
-        kuv = multiple(
+        kuv = calculate_multiple(
             year_end_price,
             revenue_ps
         )
 
 
         # ====================================================
-        # ZEILE
+        # DATENZEILE
         # ====================================================
 
         rows.append({
@@ -1569,9 +1459,7 @@ if user_input:
     # DATAFRAME
     # ========================================================
 
-    df = pd.DataFrame(
-        rows
-    )
+    df = pd.DataFrame(rows)
 
 
     # ========================================================
@@ -1615,29 +1503,29 @@ if user_input:
     ]
 
 
-    current_kgv = multiple(
+    current_kgv = calculate_multiple(
         current_price,
         current_eps
     )
 
-    current_kcv = multiple(
+    current_kcv = calculate_multiple(
         current_price,
         current_fcf_ps
     )
 
-    current_kbv = multiple(
+    current_kbv = calculate_multiple(
         current_price,
         current_bvps
     )
 
-    current_kuv = multiple(
+    current_kuv = calculate_multiple(
         current_price,
         current_revenue_ps
     )
 
 
     # ========================================================
-    # HISTORISCHE DURCHSCHNITTSWERTE
+    # HISTORISCHE DURCHSCHNITTE
     # ========================================================
 
     avg_kgv = (
@@ -1678,7 +1566,7 @@ if user_input:
 
 
     # ========================================================
-    # BEWERTUNG
+    # BEWERTUNGSVERGLEICH
     # ========================================================
 
     st.subheader(
@@ -1708,7 +1596,6 @@ if user_input:
             avg_kbv,
             avg_kuv
         ]
-
     })
 
 
@@ -1739,7 +1626,7 @@ if user_input:
     )
 
 
-    graham = graham_value(
+    graham = calculate_graham(
         avg_eps,
         avg_bvps
     )
@@ -1800,7 +1687,8 @@ if user_input:
     else:
 
         st.warning(
-            "Graham-Wert kann nicht berechnet werden."
+            "Graham-Wert kann nicht berechnet werden, "
+            "weil EPS oder Buchwert nicht positiv sind."
         )
 
 
@@ -1819,10 +1707,7 @@ if user_input:
     )
 
 
-    # --------------------------------------------------------
     # Aktienanzahl
-    # --------------------------------------------------------
-
     shares_now = safe_float(
         info.get(
             "sharesOutstanding"
@@ -1853,10 +1738,7 @@ if user_input:
             )
 
 
-    # --------------------------------------------------------
     # Netto-Schulden
-    # --------------------------------------------------------
-
     net_debt = 0.0
 
 
@@ -1959,13 +1841,13 @@ if user_input:
 
         st.warning(
             "DCF konnte nicht berechnet werden. "
-            "Dafür werden positive FCF-Daten und "
-            "eine gültige Aktienanzahl benötigt."
+            "Dafür werden positive FCF-Daten, "
+            "eine Aktienanzahl und gültige DCF-Annahmen benötigt."
         )
 
 
     # ========================================================
-    # DIVIDENDEN
+    # DIVIDENDENANALYSE
     # ========================================================
 
     st.subheader(
@@ -1993,7 +1875,7 @@ if user_input:
 
 
     # ========================================================
-    # SCORE
+    # FUNDAMENTALER SCORE
     # ========================================================
 
     st.subheader(
@@ -2001,17 +1883,17 @@ if user_input:
     )
 
 
-    score_revenue = growth_score(
+    score_revenue = calculate_growth_score(
         df["Umsatz (Mrd.)"],
         10
     )
 
-    score_eps = growth_score(
+    score_eps = calculate_growth_score(
         df["EPS"],
         10
     )
 
-    score_fcf = growth_score(
+    score_fcf = calculate_growth_score(
         df["Free Cashflow (Mrd.)"],
         10
     )
@@ -2213,9 +2095,7 @@ if user_input:
     )
 
 
-    if len(
-        dividends_clean
-    ) >= 2:
+    if len(dividends_clean) >= 2:
 
         if (
             dividends_clean.iloc[0]
@@ -2238,28 +2118,28 @@ if user_input:
     score_historical = 0
 
 
-    score_historical += valuation_score(
+    score_historical += calculate_valuation_score(
         current_kgv,
         avg_kgv,
         2.5
     )
 
 
-    score_historical += valuation_score(
+    score_historical += calculate_valuation_score(
         current_kcv,
         avg_kcv,
         2.5
     )
 
 
-    score_historical += valuation_score(
+    score_historical += calculate_valuation_score(
         current_kbv,
         avg_kbv,
         2.5
     )
 
 
-    score_historical += valuation_score(
+    score_historical += calculate_valuation_score(
         current_kuv,
         avg_kuv,
         2.5
@@ -2325,7 +2205,6 @@ if user_input:
         + score_dividend
         + score_historical
         + score_dcf
-
     )
 
 
@@ -2450,7 +2329,7 @@ if user_input:
 
 
     # ========================================================
-    # ABSCHLIESSENDER HINWEIS
+    # HINWEIS
     # ========================================================
 
     st.divider()
