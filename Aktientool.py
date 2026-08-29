@@ -420,27 +420,42 @@ if user_input:
 
     try:
         share = yf.Ticker(ticker_symbol)
-        fast_info = share.fast_info
         
-        if not fast_info or 'last_price' not in fast_info:
+        # 1. Sicherste Methode: Letzten Handelstag abrufen (Umgreift Server-Blockaden)
+        hist = share.history(period="1d")
+        
+        # FALLBACK: Falls .DE fehlschlägt, probieren wir das US-Kürzel ohne .DE
+        if hist.empty and ".DE" in ticker_symbol:
+            us_ticker = ticker_symbol.replace(".DE", "")
+            share = yf.Ticker(us_ticker)
+            hist = share.history(period="1d")
+            if not hist.empty:
+                ticker_symbol = us_ticker
+                st.warning(f"⚠️ Regionaler Ticker blockiert. Automatisch auf US-Hauptticker gewechselt: **{ticker_symbol}**")
+
+        if hist.empty:
             st.error("⚠️ Fehler: Kurse konnten von Yahoo Finance nicht abgerufen werden. Der Ticker ist evtl. temporär gesperrt oder unbekannt.")
         else:
-            current_price = fast_info.get("last_price", np.nan)
-            currency = fast_info.get("currency", "EUR")
+            # Kurs aus der Historie auslesen
+            current_price = float(hist["Close"].iloc[-1])
             
+            # Währung und Namen über info versuchen (mit sicherem Fallback)
             try:
                 info = share.info
                 company_name = info.get("longName", ticker_symbol)
+                currency = info.get("currency", "USD" if ".DE" not in ticker_symbol else "EUR")
                 industry = info.get("industry", "N/A")
             except Exception:
                 company_name = ticker_symbol
+                currency = "USD" if ".DE" not in ticker_symbol else "EUR"
                 industry = "N/A"
             
+            # Oberfläche im Browser zeichnen
             st.success(f"### {company_name}")
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric(label="Aktueller Kurs", value=f"{current_price:.2f} {currency}" if pd.notna(current_price) else "N/A")
+                st.metric(label="Aktueller Kurs", value=f"{current_price:.2f} {currency}")
             with col2:
                 st.metric(label="Währungsraum", value=currency)
             with col3:
