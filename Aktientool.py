@@ -1542,22 +1542,59 @@ if user_input:
         "4️⃣ Liquidität"
     )
 
-    table4 = df[
-        [
-            "Jahr",
-            "Liquidität 1 (%)",
-            "Liquidität 2 (%)",
-            "Liquidität 3 (%)"
-        ]
-    ]
+    liquidity_display = liquidity_df.copy()
 
-    st.dataframe(
-        table4.style.format(
-            precision=2,
-            na_rep="-"
-        ),
-        use_container_width=True
+# Zahlen formatieren
+for col in [
+    "Liquidität 1 (%)",
+    "Liquidität 2 (%)",
+    "Liquidität 3 (%)"
+]:
+    if col in liquidity_display.columns:
+        liquidity_display[col] = liquidity_display[col].round(1)
+
+# Styling für die drei Liquiditätsgrade
+styled_liquidity = (
+    liquidity_display.style
+    .map(
+        lambda value: color_liquidity(value, "L1"),
+        subset=["Liquidität 1 (%)"]
     )
+    .map(
+        lambda value: color_liquidity(value, "L2"),
+        subset=["Liquidität 2 (%)"]
+    )
+    .map(
+        lambda value: color_liquidity(value, "L3"),
+        subset=["Liquidität 3 (%)"]
+    )
+    .format({
+        "Liquidität 1 (%)": "{:.1f} %",
+        "Liquidität 2 (%)": "{:.1f} %",
+        "Liquidität 3 (%)": "{:.1f} %"
+    })
+)
+
+st.dataframe(
+    styled_liquidity,
+    use_container_width=True,
+    hide_index=True
+)
+
+# Legende
+st.markdown(
+    """
+    **Bewertung:**  
+    🔴 Schwach &nbsp;&nbsp; 🟡 Solide &nbsp;&nbsp; 🟢 Stark
+
+    | Kennzahl | 🔴 Schwach | 🟡 Solide | 🟢 Stark |
+    |---|---:|---:|---:|
+    | Liquidität 1. Grades | < 20 % | 20–30 % | > 30 % |
+    | Liquidität 2. Grades | < 100 % | 100–120 % | > 120 % |
+    | Liquidität 3. Grades | < 120 % | 120–150 % | > 150 % |
+    """,
+    unsafe_allow_html=True
+)
 
 
     # ========================================================
