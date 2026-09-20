@@ -9,14 +9,15 @@ import numpy as np
 # ============================================================
 
 st.set_page_config(
-    page_title="Mein personalisiertes Aktien-Bewertungs-Tool",
+    page_title="Aktienanalyse",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("📈 Mein personalisiertes Aktien-Bewertungs-Tool")
+st.title("📈 Aktienanalyse")
 st.caption(
-    "Fundamentalanalyse · Graham · DCF · historische Bewertung · Dividenden"
+    "Fundamentalanalyse mit historischen Kennzahlen, Bewertung, "
+    "Dividenden, Liquidität und Branchenvergleich"
 )
 
 
@@ -26,312 +27,329 @@ st.caption(
 
 def safe_float(value):
     try:
-        if value is None or pd.isna(value):
+        if value is None:
             return np.nan
-        return float(value)
+
+        if isinstance(value, pd.Series):
+            if len(value) == 0:
+                return np.nan
+            value = value.iloc[0]
+
+        if isinstance(value, pd.DataFrame):
+            if value.empty:
+                return np.nan
+            value = value.iloc[0, 0]
+
+        result = float(value)
+
+        if np.isfinite(result):
+            return result
+
+        return np.nan
+
     except Exception:
         return np.nan
 
 
-def get_row_value(df, rows, column):
+def get_row_value(df, row_names, column):
     if df is None or df.empty:
         return np.nan
 
-    for row in rows:
-        try:
-            if row in df.index and column in df.columns:
-                value = df.loc[row, column]
+    if isinstance(row_names, str):
+        row_names = [row_names]
 
-                if pd.notna(value):
-                    return float(value)
-
-        except Exception:
-            continue
+    for row_name in row_names:
+        if row_name in df.index:
+            try:
+                return safe_float(df.loc[row_name, column])
+            except Exception:
+                pass
 
     return np.nan
 
 
-def calculate_multiple(price, value_per_share):
+def calculate_multiple(price, fundamental_value):
+    price = safe_float(price)
+    fundamental_value = safe_float(fundamental_value)
+
     if (
-        pd.notna(price)
-        and pd.notna(value_per_share)
-        and value_per_share > 0
+        pd.isna(price)
+        or pd.isna(fundamental_value)
+        or fundamental_value == 0
     ):
-        return price / value_per_share
+        return np.nan
 
-    return np.nan
+    return price / fundamental_value
 
 
 def get_year_end_price(history, year):
     """
-    Letzter verfügbarer Börsenkurs des jeweiligen Jahres.
-    Dadurch wird nicht künstlich der 31.12. verwendet,
-    wenn dieser kein Börsentag war.
+    Ermittelt den letzten verfügbaren Börsenkurs
+    des jeweiligen Kalenderjahres.
     """
 
     if history is None or history.empty:
         return np.nan
 
     try:
-        data = history.copy()
+        hist = history.copy()
 
-        data.index = pd.to_datetime(data.index)
+        if not isinstance(hist.index, pd.DatetimeIndex):
+            hist.index = pd.to_datetime(hist.index)
 
-        try:
-            data.index = data.index.tz_localize(None)
-        except Exception:
-            pass
-
-        year_data = data[
-            data.index.year == year
-        ]
+        year_data = hist[hist.index.year == int(year)]
 
         if year_data.empty:
             return np.nan
 
-        close = year_data["Close"].dropna()
-
-        if close.empty:
-            return np.nan
-
-        return float(close.iloc[-1])
+        return safe_float(year_data["Close"].iloc[-1])
 
     except Exception:
         return np.nan
 
 
-def calculate_graham(eps, bvps):
+def calculate_graham(avg_eps, avg_book_value):
+    avg_eps = safe_float(avg_eps)
+    avg_book_value = safe_float(avg_book_value)
 
     if (
-        pd.notna(eps)
-        and pd.notna(bvps)
-        and eps > 0
-        and bvps > 0
+        pd.isna(avg_eps)
+        or pd.isna(avg_book_value)
+        or avg_eps <= 0
+        or avg_book_value <= 0
     ):
-        return np.sqrt(
-            22.5 * eps * bvps
-        )
+        return np.nan
 
-    return np.nan
+    return np.sqrt(22.5 * avg_eps * avg_book_value)
 
 
 def calculate_dcf(
-    fcf,
-    shares,
-    net_debt,
+    current_fcf,
     growth_rate,
     wacc,
     terminal_growth,
-    years
+    forecast_years
 ):
+    current_fcf = safe_float(current_fcf)
 
     if (
-        pd.isna(fcf)
-        or fcf <= 0
-        or pd.isna(shares)
-        or shares <= 0
+        pd.isna(current_fcf)
+        or current_fcf <= 0
+        or wacc <= terminal_growth
     ):
         return np.nan
 
-    growth = growth_rate / 100
-    discount = wacc / 100
-    terminal = terminal_growth / 100
+    try:
+        value = 0
 
-    if discount <= terminal:
+        for year in range(1, forecast_years + 1):
+            future_fcf = current_fcf * ((1 + growth_rate) ** year)
+            present_value = future_fcf / ((1 + wacc) ** year)
+            value += present_value
+
+        terminal_fcf = current_fcf * ((1 + growth_rate) ** forecast_years)
+
+        terminal_value = (
+            terminal_fcf * (1 + terminal_growth)
+            / (wacc - terminal_growth)
+        )
+
+        terminal_present_value = (
+            terminal_value
+            / ((1 + wacc) ** forecast_years)
+        )
+
+        value += terminal_present_value
+
+        return value
+
+    except Exception:
         return np.nan
 
-    pv = 0
-    forecast = []
 
-    for year in range(1, years + 1):
-
-        future_fcf = (
-            fcf * (1 + growth) ** year
-        )
-
-        forecast.append(future_fcf)
-
-        pv += (
-            future_fcf
-            / (1 + discount) ** year
-        )
-
-    terminal_fcf = (
-        forecast[-1] * (1 + terminal)
-    )
-
-    terminal_value = (
-        terminal_fcf
-        / (discount - terminal)
-    )
-
-    terminal_pv = (
-        terminal_value
-        / (1 + discount) ** years
-    )
-
-    enterprise_value = (
-        pv + terminal_pv
-    )
-
-    equity_value = (
-        enterprise_value - net_debt
-    )
-
-    return equity_value / shares
-
-
-def calculate_growth_score(values, maximum):
-
-    values = (
-        pd.Series(values)
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna()
-    )
-
-    if len(values) < 2:
+def calculate_growth_score(growth):
+    if pd.isna(growth):
         return 0
 
-    newest = values.iloc[0]
-    oldest = values.iloc[-1]
-
-    if oldest <= 0:
-        return 0
-
-    growth = (
-        (newest - oldest)
-        / abs(oldest)
-    ) * 100
-
-    if growth >= 50:
-        return maximum
-    elif growth >= 30:
-        return maximum * 0.9
-    elif growth >= 15:
-        return maximum * 0.8
+    if growth >= 15:
+        return 5
+    elif growth >= 10:
+        return 4
     elif growth >= 5:
-        return maximum * 0.7
+        return 3
     elif growth >= 0:
-        return maximum * 0.55
-    elif growth >= -10:
-        return maximum * 0.35
-    elif growth >= -25:
-        return maximum * 0.15
-
-    return 0
+        return 2
+    else:
+        return 1
 
 
-def calculate_valuation_score(
-    current,
-    historical,
-    maximum
-):
-
-    if (
-        pd.isna(current)
-        or pd.isna(historical)
-        or current <= 0
-        or historical <= 0
-    ):
+def calculate_valuation_score(value):
+    if pd.isna(value):
         return 0
 
-    difference = (
-        (historical - current)
-        / historical
-    ) * 100
-
-    if difference >= 30:
-        return maximum
-    elif difference >= 20:
-        return maximum * 0.9
-    elif difference >= 10:
-        return maximum * 0.8
-    elif difference >= 0:
-        return maximum * 0.65
-    elif difference >= -10:
-        return maximum * 0.45
-    elif difference >= -20:
-        return maximum * 0.2
-
-    return 0
+    if value >= 80:
+        return 5
+    elif value >= 60:
+        return 4
+    elif value >= 40:
+        return 3
+    elif value >= 20:
+        return 2
+    else:
+        return 1
 
 
 # ============================================================
-# FIRMEN- UND TICKER-ZUORDNUNGEN
+# LIQUIDITÄTS-AMPELFUNKTION
+# ============================================================
+
+def color_liquidity(value, liquidity_type):
+    """
+    Bewertung:
+
+    Liquidität 1:
+        < 20 %       = schwach
+        20–30 %      = solide
+        > 30 %       = stark
+
+    Liquidität 2:
+        < 100 %      = schwach
+        100–120 %    = solide
+        > 120 %      = stark
+
+    Liquidität 3:
+        < 120 %      = schwach
+        120–150 %    = solide
+        > 150 %      = stark
+    """
+
+    if pd.isna(value):
+        return ""
+
+    value = float(value)
+
+    if liquidity_type == "L1":
+
+        if value < 20:
+            return (
+                "background-color: #ffcccc;"
+                "color: #990000;"
+                "font-weight: bold;"
+            )
+
+        elif value <= 30:
+            return (
+                "background-color: #fff2cc;"
+                "color: #7f6000;"
+                "font-weight: bold;"
+            )
+
+        else:
+            return (
+                "background-color: #ccffcc;"
+                "color: #006100;"
+                "font-weight: bold;"
+            )
+
+    elif liquidity_type == "L2":
+
+        if value < 100:
+            return (
+                "background-color: #ffcccc;"
+                "color: #990000;"
+                "font-weight: bold;"
+            )
+
+        elif value <= 120:
+            return (
+                "background-color: #fff2cc;"
+                "color: #7f6000;"
+                "font-weight: bold;"
+            )
+
+        else:
+            return (
+                "background-color: #ccffcc;"
+                "color: #006100;"
+                "font-weight: bold;"
+            )
+
+    elif liquidity_type == "L3":
+
+        if value < 120:
+            return (
+                "background-color: #ffcccc;"
+                "color: #990000;"
+                "font-weight: bold;"
+            )
+
+        elif value <= 150:
+            return (
+                "background-color: #fff2cc;"
+                "color: #7f6000;"
+                "font-weight: bold;"
+            )
+
+        else:
+            return (
+                "background-color: #ccffcc;"
+                "color: #006100;"
+                "font-weight: bold;"
+            )
+
+    return ""
+
+
+# ============================================================
+# UNTERNEHMEN / TICKER
 # ============================================================
 
 COMPANY_MAP = {
 
     # Deutschland
+    "SAP": "SAP.DE",
+    "SIEMENS": "SIE.DE",
+    "ALLIANZ": "ALV.DE",
+    "BASF": "BAS.DE",
+    "BMW": "BMW.DE",
+    "MERCEDES": "MBG.DE",
+    "MERCEDES-BENZ": "MBG.DE",
+    "VOLKSWAGEN": "VOW3.DE",
+    "VW": "VOW3.DE",
+    "ADIDAS": "ADS.DE",
+    "DEUTSCHE BANK": "DBK.DE",
+    "DEUTSCHE TELEKOM": "DTE.DE",
+    "MUNICH RE": "MUV2.DE",
+    "MÜNCHENER RÜCK": "MUV2.DE",
+    "HENKEL": "HEN3.DE",
+    "COVESTRO": "1COV.DE",
+
+    # InnoTec TSS
     "INNOTEC TSS": "TSS.DE",
     "INNOTEC": "TSS.DE",
     "TSS": "TSS.DE",
 
-    "SAP": "SAP.DE",
-    "SIEMENS": "SIE.DE",
-    "ALLIANZ": "ALV.DE",
-    "BMW": "BMW.DE",
-    "MERCEDES": "MBG.DE",
-    "MERCEDES-BENZ": "MBG.DE",
-    "MERCEDES BENZ": "MBG.DE",
-    "DEUTSCHE TELEKOM": "DTE.DE",
-    "TELEKOM": "DTE.DE",
-    "INFINEON": "IFX.DE",
-    "BASF": "BAS.DE",
-    "ADIDAS": "ADS.DE",
-    "VOLKSWAGEN": "VOW3.DE",
-    "VW": "VOW3.DE",
-    "DEUTSCHE BANK": "DBK.DE",
-    "COMMERZBANK": "CBK.DE",
-    "MUNICH RE": "MUV2.DE",
-    "MÜNCHENER RÜCK": "MUV2.DE",
-    "DEUTSCHE POST": "DHL.DE",
-    "HEIDELBERG MATERIALS": "HEI.DE",
-    "CONTINENTAL": "CON.DE",
-    "HENKEL": "HEN3.DE",
-    "RHEINMETALL": "RHM.DE",
-    "FRESENIUS": "FRE.DE",
-    "E.ON": "EOAN.DE",
-    "VONOVIA": "VNA.DE",
-    "PUMA": "PUM.DE",
-    "BEIERSDORF": "BEI.DE",
-    "MERCK": "MRK.DE",
-    "QIAGEN": "QIA.DE",
-
     # USA
     "APPLE": "AAPL",
     "MICROSOFT": "MSFT",
-    "AMAZON": "AMZN",
     "ALPHABET": "GOOGL",
     "GOOGLE": "GOOGL",
+    "AMAZON": "AMZN",
     "META": "META",
-    "NVIDIA": "NVDA",
     "TESLA": "TSLA",
-    "PEPSICO": "PEP",
-    "PEPSI": "PEP",
     "COCA COLA": "KO",
     "COCA-COLA": "KO",
+    "PEPSI": "PEP",
+    "JOHNSON & JOHNSON": "JNJ",
+    "JOHNSON AND JOHNSON": "JNJ",
     "MCDONALDS": "MCD",
     "MCDONALD'S": "MCD",
-    "JOHNSON & JOHNSON": "JNJ",
-    "JOHNSON JOHNSON": "JNJ",
-    "PROCTER & GAMBLE": "PG",
-    "PROCTER GAMBLE": "PG",
-    "BERKSHIRE HATHAWAY": "BRK-B",
-    "VISA": "V",
-    "MASTERCARD": "MA",
-    "JPMORGAN": "JPM",
-    "JPMORGAN CHASE": "JPM",
-    "EXXON": "XOM",
-    "EXXON MOBIL": "XOM",
-    "CHEVRON": "CVX",
-    "COSTCO": "COST",
-    "WALMART": "WMT",
     "NIKE": "NKE",
-    "ADOBE": "ADBE",
-    "BROADCOM": "AVGO",
-    "INTEL": "INTC",
-    "AMD": "AMD",
+    "WALMART": "WMT",
+    "PROCTER & GAMBLE": "PG",
+    "PROCTER AND GAMBLE": "PG",
+    "FORD": "F",
+    "GENERAL MOTORS": "GM",
 
     # Japan
     "TOYOTA": "7203.T",
@@ -339,14 +357,16 @@ COMPANY_MAP = {
     "TOYOTA MOTOR CORPORATION": "7203.T",
     "TOM": "7203.T",
 
+    # weitere
+    "SONY": "6758.T",
     "HONDA": "7267.T",
     "NISSAN": "7201.T",
-
-    # weitere bekannte japanische Aktien
-    "SONY": "6758.T",
-    "PANASONIC": "6752.T"
 }
 
+
+# ============================================================
+# WKN / ISIN
+# ============================================================
 
 IDENTIFIER_MAP = {
 
@@ -358,136 +378,96 @@ IDENTIFIER_MAP = {
     "853510": "7203.T",
     "JP3633400001": "7203.T",
 
-    # SAP
-    "716460": "SAP.DE",
-    "DE0007164600": "SAP.DE",
+    # Apple
+    "865985": "AAPL",
+    "US0378331005": "AAPL",
 
-    # Siemens
-    "723610": "SIE.DE",
-    "DE0007236101": "SIE.DE",
+    # Microsoft
+    "870747": "MSFT",
+    "US5949181045": "MSFT",
 
-    # Allianz
-    "840400": "ALV.DE",
-    "DE0008404005": "ALV.DE",
+    # Alphabet
+    "A14Y6F": "GOOGL",
+    "US02079K3059": "GOOGL",
 
-    # BMW
-    "519000": "BMW.DE",
-    "DE0005190003": "BMW.DE",
+    # Amazon
+    "906866": "AMZN",
+    "US0231351067": "AMZN",
 
-    # Mercedes-Benz
-    "710000": "MBG.DE",
-    "DE0007100000": "MBG.DE",
+    # Coca Cola
+    "850663": "KO",
+    "US1912161007": "KO",
 
-    # Deutsche Telekom
-    "555750": "DTE.DE",
-    "DE0005557508": "DTE.DE",
-
-    # Infineon
-    "623100": "IFX.DE",
-    "DE0006231004": "IFX.DE",
-
-    # Adidas
-    "A1EWWW": "ADS.DE",
-    "DE000A1EWWW0": "ADS.DE",
-
-    # Volkswagen
-    "766403": "VOW3.DE",
-    "DE0007664039": "VOW3.DE",
-
-    # Deutsche Bank
-    "514000": "DBK.DE",
-    "DE0005140008": "DBK.DE",
-
-    # Commerzbank
-    "CBK100": "CBK.DE",
-    "DE000CBK1001": "CBK.DE",
-
-    # Munich Re
-    "843002": "MUV2.DE",
-    "DE0008430026": "MUV2.DE",
-
-    # Deutsche Post
-    "555200": "DHL.DE",
-    "DE0005552004": "DHL.DE"
+    # Pepsi
+    "851995": "PEP",
+    "US7134481081": "PEP",
 }
 
 
 def normalize_input(user_input):
+    value = user_input.strip()
 
-    value = (
-        user_input
-        .strip()
-        .upper()
-    )
+    if not value:
+        return None
 
-    if value in COMPANY_MAP:
-        return COMPANY_MAP[value]
+    upper = value.upper()
 
-    if value in IDENTIFIER_MAP:
-        return IDENTIFIER_MAP[value]
+    # Direkter Treffer Firmenname
+    if upper in COMPANY_MAP:
+        return COMPANY_MAP[upper]
 
-    if value in ["BRK.B", "BRK/B"]:
-        return "BRK-B"
+    # WKN / ISIN
+    if upper in IDENTIFIER_MAP:
+        return IDENTIFIER_MAP[upper]
 
-    if "." in value:
-        return value
-
-    return value
+    # Direkter Yahoo-Ticker
+    return upper
 
 
 # ============================================================
 # BRANCHEN-PEERS
-#
-# Diese Liste kann jederzeit erweitert/geändert werden.
 # ============================================================
 
 INDUSTRY_PEERS = {
 
-    # Toyota / Automobil
     "7203.T": [
-        "7267.T",   # Honda
-        "7201.T",   # Nissan
-        "005380.KS", # Hyundai
-        "F",        # Ford
-        "GM"        # General Motors
+        "7267.T",
+        "7201.T",
+        "005380.KS",
+        "F",
+        "GM"
     ],
 
-    # InnoTec TSS / Industrie
     "TSS.DE": [
         "S92.DE",
         "KSB3.DE",
         "MLP.DE"
     ],
 
-    # Apple
     "AAPL": [
         "MSFT",
         "GOOGL",
         "META"
     ],
 
-    # Microsoft
     "MSFT": [
         "AAPL",
         "GOOGL",
         "ORCL"
     ],
 
-    # SAP
     "SAP.DE": [
         "ORCL",
         "CRM",
         "ADBE"
     ],
 
-    # Pepsi
     "PEP": [
         "KO",
         "MNST",
         "KDP"
     ],
 
-    # Coca-Cola
     "KO": [
         "PEP",
         "KDP",
@@ -498,15 +478,9 @@ INDUSTRY_PEERS = {
 
 # ============================================================
 # DATEN LADEN
-#
-# Wichtig:
-# Das yf.Ticker-Objekt wird NICHT gecacht.
 # ============================================================
 
-@st.cache_data(
-    ttl=1800,
-    show_spinner=False
-)
+@st.cache_data(ttl=1800)
 def load_data(ticker_symbol):
 
     ticker = yf.Ticker(ticker_symbol)
@@ -518,15 +492,9 @@ def load_data(ticker_symbol):
     )
 
     income_stmt = ticker.income_stmt
-
     balance_sheet = ticker.balance_sheet
-
     cashflow = ticker.cashflow
-
-    try:
-        dividends = ticker.dividends
-    except Exception:
-        dividends = pd.Series(dtype=float)
+    dividends = ticker.dividends
 
     return {
         "history": history,
@@ -541,10 +509,7 @@ def load_data(ticker_symbol):
 # PEER-DATEN
 # ============================================================
 
-@st.cache_data(
-    ttl=3600,
-    show_spinner=False
-)
+@st.cache_data(ttl=3600)
 def get_peer_metrics(peer_tickers):
 
     results = []
@@ -555,29 +520,26 @@ def get_peer_metrics(peer_tickers):
 
             ticker = yf.Ticker(peer)
 
-            financials = ticker.income_stmt
+            income = ticker.income_stmt
             balance = ticker.balance_sheet
             cashflow = ticker.cashflow
 
-            if (
-                financials is None
-                or financials.empty
-            ):
+            if income is None or income.empty:
                 continue
 
-            latest_year = financials.columns[0]
+            if balance is None or balance.empty:
+                continue
+
+            latest_year = income.columns[0]
 
             revenue = get_row_value(
-                financials,
-                [
-                    "Total Revenue",
-                    "Operating Revenue"
-                ],
+                income,
+                ["Total Revenue", "Operating Revenue"],
                 latest_year
             )
 
             net_income = get_row_value(
-                financials,
+                income,
                 [
                     "Net Income",
                     "Net Income Common Stockholders"
@@ -595,127 +557,6 @@ def get_peer_metrics(peer_tickers):
                 latest_year
             )
 
-            fcf = get_row_value(
-                cashflow,
-                [
-                    "Free Cash Flow"
-                ],
-                latest_year
-            )
-
-            shares = get_row_value(
-                financials,
-                [
-                    "Diluted Average Shares",
-                    "Basic Average Shares"
-                ],
-                latest_year
-            )
-
-            if pd.isna(shares):
-
-                shares = get_row_value(
-                    balance,
-                    [
-                        "Ordinary Shares Number",
-                        "Share Issued"
-                    ],
-                    latest_year
-                )
-
-            if (
-                pd.notna(net_income)
-                and pd.notna(shares)
-                and shares > 0
-            ):
-                eps = net_income / shares
-            else:
-                eps = np.nan
-
-            if (
-                pd.notna(equity)
-                and pd.notna(shares)
-                and shares > 0
-            ):
-                bvps = equity / shares
-            else:
-                bvps = np.nan
-
-            if (
-                pd.notna(fcf)
-                and pd.notna(shares)
-                and shares > 0
-            ):
-                fcf_ps = fcf / shares
-            else:
-                fcf_ps = np.nan
-
-            if (
-                pd.notna(revenue)
-                and pd.notna(shares)
-                and shares > 0
-            ):
-                revenue_ps = revenue / shares
-            else:
-                revenue_ps = np.nan
-
-            # aktueller Kurs
-            history = ticker.history(
-                period="5d",
-                interval="1d",
-                auto_adjust=False
-            )
-
-            if (
-                history is not None
-                and not history.empty
-            ):
-                price = float(
-                    history["Close"].dropna().iloc[-1]
-                )
-            else:
-                price = np.nan
-
-            kgv = calculate_multiple(
-                price,
-                eps
-            )
-
-            kcv = calculate_multiple(
-                price,
-                fcf_ps
-            )
-
-            kbv = calculate_multiple(
-                price,
-                bvps
-            )
-
-            kuv = calculate_multiple(
-                price,
-                revenue_ps
-            )
-
-            fcf_margin = (
-                fcf / revenue * 100
-                if (
-                    pd.notna(fcf)
-                    and pd.notna(revenue)
-                    and revenue != 0
-                )
-                else np.nan
-            )
-
-            roe = (
-                net_income / equity * 100
-                if (
-                    pd.notna(net_income)
-                    and pd.notna(equity)
-                    and equity > 0
-                )
-                else np.nan
-            )
-
             debt = get_row_value(
                 balance,
                 [
@@ -725,15 +566,152 @@ def get_peer_metrics(peer_tickers):
                 latest_year
             )
 
-            debt_equity = (
-                debt / equity * 100
+            if cashflow is not None and not cashflow.empty:
+
+                fcf = get_row_value(
+                    cashflow,
+                    ["Free Cash Flow"],
+                    latest_year
+                )
+
+                if pd.isna(fcf):
+
+                    operating_cf = get_row_value(
+                        cashflow,
+                        [
+                            "Operating Cash Flow",
+                            "Total Cash From Operating Activities"
+                        ],
+                        latest_year
+                    )
+
+                    capex = get_row_value(
+                        cashflow,
+                        [
+                            "Capital Expenditure",
+                            "Capital Expenditures"
+                        ],
+                        latest_year
+                    )
+
+                    if not pd.isna(operating_cf):
+
+                        if pd.isna(capex):
+                            capex = 0
+
+                        fcf = operating_cf + capex
+
+            else:
+                fcf = np.nan
+
+            shares = get_row_value(
+                income,
+                [
+                    "Diluted Average Shares",
+                    "Basic Average Shares"
+                ],
+                latest_year
+            )
+
+            if pd.isna(shares):
+                shares = get_row_value(
+                    balance,
+                    [
+                        "Ordinary Shares Number",
+                        "Share Issued"
+                    ],
+                    latest_year
+                )
+
+            price = np.nan
+
+            try:
+                hist = ticker.history(
+                    period="5d",
+                    interval="1d",
+                    auto_adjust=False
+                )
+
+                if not hist.empty:
+                    price = safe_float(hist["Close"].iloc[-1])
+
+            except Exception:
+                pass
+
+            eps = (
+                net_income / shares
                 if (
-                    pd.notna(debt)
-                    and pd.notna(equity)
-                    and equity > 0
+                    not pd.isna(net_income)
+                    and not pd.isna(shares)
+                    and shares != 0
                 )
                 else np.nan
             )
+
+            book_value = (
+                equity / shares
+                if (
+                    not pd.isna(equity)
+                    and not pd.isna(shares)
+                    and shares != 0
+                )
+                else np.nan
+            )
+
+            fcf_per_share = (
+                fcf / shares
+                if (
+                    not pd.isna(fcf)
+                    and not pd.isna(shares)
+                    and shares != 0
+                )
+                else np.nan
+            )
+
+            revenue_per_share = (
+                revenue / shares
+                if (
+                    not pd.isna(revenue)
+                    and not pd.isna(shares)
+                    and shares != 0
+                )
+                else np.nan
+            )
+
+            fcf_margin = (
+                fcf / revenue * 100
+                if (
+                    not pd.isna(fcf)
+                    and not pd.isna(revenue)
+                    and revenue != 0
+                )
+                else np.nan
+            )
+
+            roe = (
+                net_income / equity * 100
+                if (
+                    not pd.isna(net_income)
+                    and not pd.isna(equity)
+                    and equity != 0
+                )
+                else np.nan
+            )
+
+            debt_equity = (
+                debt / equity * 100
+                if (
+                    not pd.isna(debt)
+                    and not pd.isna(equity)
+                    and equity != 0
+                )
+                else np.nan
+            )
+
+            kgv = calculate_multiple(price, eps)
+            kbv = calculate_multiple(price, book_value)
+            kcv = calculate_multiple(price, fcf_per_share)
+            kuv = calculate_multiple(price, revenue_per_share)
 
             results.append({
                 "Ticker": peer,
@@ -749,6 +727,9 @@ def get_peer_metrics(peer_tickers):
         except Exception:
             continue
 
+    if not results:
+        return pd.DataFrame()
+
     return pd.DataFrame(results)
 
 
@@ -759,47 +740,47 @@ def get_peer_metrics(peer_tickers):
 st.sidebar.header("⚙️ DCF-Annahmen")
 
 forecast_years = st.sidebar.slider(
-    "Prognosezeitraum",
-    3,
-    10,
-    5
+    "Prognosejahre",
+    min_value=3,
+    max_value=10,
+    value=5
 )
 
-growth_rate = st.sidebar.slider(
+fcf_growth = st.sidebar.number_input(
     "FCF-Wachstum (%)",
-    -10.0,
-    30.0,
-    8.0,
-    0.5
-)
+    min_value=-50.0,
+    max_value=100.0,
+    value=5.0,
+    step=0.5
+) / 100
 
-wacc = st.sidebar.slider(
+wacc = st.sidebar.number_input(
     "WACC (%)",
-    5.0,
-    15.0,
-    9.0,
-    0.25
-)
+    min_value=1.0,
+    max_value=30.0,
+    value=8.0,
+    step=0.5
+) / 100
 
-terminal_growth = st.sidebar.slider(
-    "Terminal Growth (%)",
-    0.0,
-    5.0,
-    2.5,
-    0.25
-)
+terminal_growth = st.sidebar.number_input(
+    "Terminal-Wachstum (%)",
+    min_value=0.0,
+    max_value=10.0,
+    value=2.0,
+    step=0.5
+) / 100
 
-margin_of_safety = st.sidebar.slider(
+margin_of_safety = st.sidebar.number_input(
     "Sicherheitsmarge (%)",
-    0,
-    50,
-    20,
-    5
-)
+    min_value=0.0,
+    max_value=50.0,
+    value=20.0,
+    step=5.0
+) / 100
 
 
 # ============================================================
-# AKTIE EINGEBEN
+# AKTIENSUCHE
 # ============================================================
 
 user_input = st.text_input(
@@ -807,1061 +788,945 @@ user_input = st.text_input(
     value="Toyota Motor"
 )
 
+ticker_symbol = normalize_input(user_input)
 
-if user_input:
+if not ticker_symbol:
+    st.warning("Bitte eine Aktie eingeben.")
+    st.stop()
 
-    ticker_symbol = normalize_input(
-        user_input
+
+# ============================================================
+# DATEN LADEN
+# ============================================================
+
+try:
+
+    with st.spinner("Lade Finanzdaten von Yahoo Finance ..."):
+        data = load_data(ticker_symbol)
+
+except Exception as e:
+
+    st.error(
+        "Die Daten konnten nicht geladen werden. "
+        "Yahoo Finance könnte momentan eine Anfragebegrenzung aktiv haben."
     )
 
-    st.info(
-        f"Erkannter Yahoo-Finance-Ticker: "
-        f"**{ticker_symbol}**"
-    )
-
-    # ========================================================
-    # DATEN LADEN
-    # ========================================================
-
-    try:
-
-        with st.spinner(
-            f"Lade Daten für {ticker_symbol}..."
-        ):
-
-            data = load_data(
-                ticker_symbol
-            )
-
-    except Exception as e:
-
-        error_text = str(e).lower()
-
-        if (
-            "too many requests" in error_text
-            or "rate limit" in error_text
-            or "429" in error_text
-        ):
-
-            st.error(
-                "⚠️ Yahoo Finance hat die Anfrage "
-                "wegen eines Rate-Limits abgelehnt."
-            )
-
-        else:
-
-            st.error(
-                "⚠️ Fehler beim Laden der Yahoo-Finance-Daten."
-            )
-
-            st.code(str(e))
-
-        st.stop()
+    st.exception(e)
+    st.stop()
 
 
-    history = data["history"]
-    financials = data["income_stmt"]
-    balance_sheet = data["balance_sheet"]
-    cashflow = data["cashflow"]
-    dividends = data["dividends"]
-
-    ticker = yf.Ticker(
-        ticker_symbol
-    )
+history = data["history"]
+income_stmt = data["income_stmt"]
+balance_sheet = data["balance_sheet"]
+cashflow = data["cashflow"]
+dividends = data["dividends"]
 
 
-    # ========================================================
-    # KURSE PRÜFEN
-    # ========================================================
+if income_stmt is None or income_stmt.empty:
+    st.error("Keine Gewinn- und Verlustrechnung verfügbar.")
+    st.stop()
 
-    if (
-        history is None
-        or history.empty
-    ):
+if balance_sheet is None or balance_sheet.empty:
+    st.error("Keine Bilanzdaten verfügbar.")
+    st.stop()
 
-        st.error(
-            f"⚠️ Yahoo Finance liefert für "
-            f"**{ticker_symbol}** keine historischen Kurse."
+
+# ============================================================
+# TICKER-INFORMATIONEN
+# ============================================================
+
+ticker = yf.Ticker(ticker_symbol)
+
+try:
+
+    info = ticker.info
+
+except Exception:
+
+    info = {}
+
+
+company_name = info.get(
+    "longName",
+    info.get("shortName", ticker_symbol)
+)
+
+exchange = info.get("exchange", "–")
+sector = info.get("sector", "–")
+industry = info.get("industry", "–")
+
+
+# ============================================================
+# AKTUELLE KURSDATEN
+# ============================================================
+
+current_price = np.nan
+
+try:
+
+    if history is not None and not history.empty:
+        current_price = safe_float(
+            history["Close"].iloc[-1]
         )
 
-        st.stop()
+except Exception:
+    pass
 
 
-    close = history["Close"].dropna()
+# ============================================================
+# KOPFBEREICH
+# ============================================================
 
-    if close.empty:
+st.header(company_name)
 
-        st.error(
-            "⚠️ Keine Schlusskurse verfügbar."
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(
+        "Aktueller Kurs",
+        (
+            f"{current_price:.2f}"
+            if not pd.isna(current_price)
+            else "–"
         )
-
-        st.stop()
-
-
-    current_price = float(
-        close.iloc[-1]
     )
 
+with col2:
+    st.metric("Yahoo-Ticker", ticker_symbol)
 
-    # ========================================================
-    # UNTERNEHMENSINFO
-    # ========================================================
+with col3:
+    st.metric("Börse", exchange)
+
+with col4:
+    st.metric("Branche", industry)
+
+
+if sector != "–":
+    st.caption(f"Sektor: {sector}")
+
+
+# ============================================================
+# HISTORISCHE JAHRE
+# ============================================================
+
+financial_years = list(income_stmt.columns[:5])
+
+if not financial_years:
+    st.error("Keine historischen Geschäftsjahre verfügbar.")
+    st.stop()
+
+
+# ============================================================
+# HISTORISCHE DATEN
+# ============================================================
+
+historical_rows = []
+share_rows = []
+payout_rows = []
+liquidity_rows = []
+quality_rows = []
+valuation_rows = []
+
+
+for year_column in financial_years:
 
     try:
-        info = ticker.info
+        year = pd.Timestamp(year_column).year
     except Exception:
-        info = {}
+        continue
 
 
-    company_name = info.get(
-        "longName",
-        info.get(
-            "shortName",
-            ticker_symbol
-        )
+    # --------------------------------------------------------
+    # GuV
+    # --------------------------------------------------------
+
+    revenue = get_row_value(
+        income_stmt,
+        [
+            "Total Revenue",
+            "Operating Revenue"
+        ],
+        year_column
     )
 
-    currency = info.get(
-        "currency",
-        "EUR"
-        if ticker_symbol.endswith(".DE")
-        else "USD"
-    )
-
-    exchange = info.get(
-        "exchange",
-        "-"
-    )
-
-    sector = info.get(
-        "sector",
-        "-"
-    )
-
-    industry = info.get(
-        "industry",
-        "-"
+    net_income = get_row_value(
+        income_stmt,
+        [
+            "Net Income",
+            "Net Income Common Stockholders"
+        ],
+        year_column
     )
 
 
-    st.subheader(
-        f"{company_name} ({ticker_symbol})"
+    # --------------------------------------------------------
+    # Bilanz
+    # --------------------------------------------------------
+
+    equity = get_row_value(
+        balance_sheet,
+        [
+            "Stockholders Equity",
+            "Common Stock Equity",
+            "Total Equity Gross Minority Interest"
+        ],
+        year_column
+    )
+
+    debt = get_row_value(
+        balance_sheet,
+        [
+            "Total Debt",
+            "Total Debt And Capital Lease Obligation"
+        ],
+        year_column
+    )
+
+    cash = get_row_value(
+        balance_sheet,
+        [
+            "Cash And Cash Equivalents",
+            "Cash Cash Equivalents And Short Term Investments"
+        ],
+        year_column
+    )
+
+    receivables = get_row_value(
+        balance_sheet,
+        [
+            "Receivables",
+            "Accounts Receivable"
+        ],
+        year_column
+    )
+
+    current_assets = get_row_value(
+        balance_sheet,
+        [
+            "Current Assets",
+            "Total Current Assets"
+        ],
+        year_column
+    )
+
+    current_liabilities = get_row_value(
+        balance_sheet,
+        [
+            "Current Liabilities",
+            "Total Current Liabilities"
+        ],
+        year_column
     )
 
 
-    c1, c2, c3, c4 = st.columns(4)
+    # --------------------------------------------------------
+    # Free Cashflow
+    # --------------------------------------------------------
 
-    with c1:
-        st.metric(
-            "Aktueller Kurs",
-            f"{current_price:.2f} {currency}"
-        )
-
-    with c2:
-        st.metric(
-            "Börsenplatz",
-            exchange
-        )
-
-    with c3:
-        st.metric(
-            "Sektor",
-            sector
-        )
-
-    with c4:
-        st.metric(
-            "Branche",
-            industry
-        )
-
-
-    # ========================================================
-    # FINANZDATEN PRÜFEN
-    # ========================================================
-
-    if (
-        financials is None
-        or financials.empty
-    ):
-
-        st.warning(
-            "⚠️ Keine ausreichenden Finanzdaten verfügbar."
-        )
-
-        st.stop()
-
-
-    # ========================================================
-    # JAHRE
-    # ========================================================
-
-    years = list(
-        financials.columns[:5]
+    fcf = get_row_value(
+        cashflow,
+        [
+            "Free Cash Flow"
+        ],
+        year_column
     )
 
-    rows = []
+    if pd.isna(fcf):
 
-
-    # ========================================================
-    # JAHRESSCHLEIFE
-    # ========================================================
-
-    for year in years:
-
-        year_number = pd.Timestamp(
-            year
-        ).year
-
-
-        revenue = get_row_value(
-            financials,
-            [
-                "Total Revenue",
-                "Operating Revenue"
-            ],
-            year
-        )
-
-
-        net_income = get_row_value(
-            financials,
-            [
-                "Net Income",
-                "Net Income Common Stockholders"
-            ],
-            year
-        )
-
-
-        equity = get_row_value(
-            balance_sheet,
-            [
-                "Stockholders Equity",
-                "Common Stock Equity",
-                "Total Equity Gross Minority Interest"
-            ],
-            year
-        )
-
-
-        debt = get_row_value(
-            balance_sheet,
-            [
-                "Total Debt",
-                "Total Debt And Capital Lease Obligation"
-            ],
-            year
-        )
-
-
-        cash = get_row_value(
-            balance_sheet,
-            [
-                "Cash And Cash Equivalents",
-                "Cash Cash Equivalents And Short Term Investments"
-            ],
-            year
-        )
-
-
-        receivables = get_row_value(
-            balance_sheet,
-            [
-                "Receivables",
-                "Accounts Receivable"
-            ],
-            year
-        )
-
-
-        current_assets = get_row_value(
-            balance_sheet,
-            [
-                "Current Assets"
-            ],
-            year
-        )
-
-
-        current_liabilities = get_row_value(
-            balance_sheet,
-            [
-                "Current Liabilities"
-            ],
-            year
-        )
-
-
-        fcf = get_row_value(
+        operating_cf = get_row_value(
             cashflow,
             [
-                "Free Cash Flow"
+                "Operating Cash Flow",
+                "Total Cash From Operating Activities"
             ],
-            year
+            year_column
         )
 
+        capex = get_row_value(
+            cashflow,
+            [
+                "Capital Expenditure",
+                "Capital Expenditures"
+            ],
+            year_column
+        )
 
-        if pd.isna(fcf):
+        if not pd.isna(operating_cf):
 
-            operating_cf = get_row_value(
-                cashflow,
-                [
-                    "Operating Cash Flow",
-                    "Total Cash From Operating Activities"
-                ],
-                year
-            )
+            if pd.isna(capex):
+                capex = 0
 
-            capex = get_row_value(
-                cashflow,
-                [
-                    "Capital Expenditure"
-                ],
-                year
-            )
+            fcf = operating_cf + capex
 
-            if (
-                pd.notna(operating_cf)
-                and pd.notna(capex)
-            ):
 
-                fcf = (
-                    operating_cf + capex
-                )
+    # --------------------------------------------------------
+    # Aktienanzahl
+    # --------------------------------------------------------
 
+    shares = get_row_value(
+        income_stmt,
+        [
+            "Diluted Average Shares",
+            "Basic Average Shares"
+        ],
+        year_column
+    )
+
+    if pd.isna(shares):
 
         shares = get_row_value(
-            financials,
+            balance_sheet,
             [
-                "Diluted Average Shares",
-                "Basic Average Shares"
+                "Ordinary Shares Number",
+                "Share Issued"
             ],
-            year
+            year_column
         )
 
 
-        if pd.isna(shares):
+    # --------------------------------------------------------
+    # EPS
+    # --------------------------------------------------------
 
-            shares = get_row_value(
-                balance_sheet,
-                [
-                    "Ordinary Shares Number",
-                    "Share Issued"
-                ],
-                year
-            )
+    eps = np.nan
 
-
-        # EPS
-        if (
-            pd.notna(net_income)
-            and pd.notna(shares)
-            and shares > 0
-        ):
-            eps = net_income / shares
-        else:
-            eps = np.nan
+    if (
+        not pd.isna(net_income)
+        and not pd.isna(shares)
+        and shares != 0
+    ):
+        eps = net_income / shares
 
 
-        # Buchwert/Aktie
-        if (
-            pd.notna(equity)
-            and pd.notna(shares)
-            and shares > 0
-        ):
-            bvps = equity / shares
-        else:
-            bvps = np.nan
+    # --------------------------------------------------------
+    # Kennzahlen je Aktie
+    # --------------------------------------------------------
+
+    book_value_per_share = np.nan
+    revenue_per_share = np.nan
+    fcf_per_share = np.nan
+
+    if (
+        not pd.isna(equity)
+        and not pd.isna(shares)
+        and shares != 0
+    ):
+        book_value_per_share = equity / shares
+
+    if (
+        not pd.isna(revenue)
+        and not pd.isna(shares)
+        and shares != 0
+    ):
+        revenue_per_share = revenue / shares
+
+    if (
+        not pd.isna(fcf)
+        and not pd.isna(shares)
+        and shares != 0
+    ):
+        fcf_per_share = fcf / shares
 
 
-        # FCF/Aktie
-        if (
-            pd.notna(fcf)
-            and pd.notna(shares)
-            and shares > 0
-        ):
-            fcf_ps = fcf / shares
-        else:
-            fcf_ps = np.nan
+    # --------------------------------------------------------
+    # Dividende
+    # --------------------------------------------------------
 
+    dividend_per_share = np.nan
 
-        # Umsatz/Aktie
-        if (
-            pd.notna(revenue)
-            and pd.notna(shares)
-            and shares > 0
-        ):
-            revenue_ps = revenue / shares
-        else:
-            revenue_ps = np.nan
+    try:
 
+        if dividends is not None and not dividends.empty:
 
-        # ====================================================
-        # DIVIDENDE
-        # ====================================================
+            divs = dividends.copy()
 
-        dividend_ps = 0.0
+            if not isinstance(divs.index, pd.DatetimeIndex):
+                divs.index = pd.to_datetime(divs.index)
 
-        if (
-            dividends is not None
-            and not dividends.empty
-        ):
+            year_dividends = divs[
+                divs.index.year == year
+            ]
 
-            try:
-
-                divs = dividends.copy()
-
-                divs.index = pd.to_datetime(
-                    divs.index
+            if not year_dividends.empty:
+                dividend_per_share = safe_float(
+                    year_dividends.sum()
                 )
 
-                try:
-                    divs.index = (
-                        divs.index.tz_localize(None)
-                    )
-                except Exception:
-                    pass
-
-                year_dividends = divs[
-                    divs.index.year == year_number
-                ]
-
-                if not year_dividends.empty:
-
-                    dividend_ps = float(
-                        year_dividends.sum()
-                    )
-
-            except Exception:
-
-                dividend_ps = 0.0
+    except Exception:
+        pass
 
 
-        # ====================================================
-        # AUSSCHÜTTUNGSQUOTEN
-        # ====================================================
+    # --------------------------------------------------------
+    # Ausschüttungsquoten
+    # --------------------------------------------------------
 
-        if (
-            pd.notna(eps)
-            and eps > 0
-        ):
-            payout_1 = (
-                dividend_ps / eps
-            ) * 100
-        else:
-            payout_1 = np.nan
+    payout_eps = np.nan
+    payout_fcf = np.nan
 
+    if (
+        not pd.isna(dividend_per_share)
+        and not pd.isna(eps)
+        and eps != 0
+    ):
+        payout_eps = (
+            dividend_per_share / eps * 100
+        )
 
-        if (
-            pd.notna(fcf_ps)
-            and fcf_ps > 0
-        ):
-            payout_2 = (
-                dividend_ps / fcf_ps
-            ) * 100
-        else:
-            payout_2 = np.nan
-
-
-        # ====================================================
-        # LIQUIDITÄT
-        # ====================================================
-
-        if (
-            pd.notna(current_liabilities)
-            and current_liabilities > 0
-        ):
-
-            liq1 = (
-                cash / current_liabilities
-            ) * 100
-
-            liq2 = (
-                (cash + receivables)
-                / current_liabilities
-            ) * 100
-
-            liq3 = (
-                current_assets
-                / current_liabilities
-            ) * 100
-
-        else:
-
-            liq1 = np.nan
-            liq2 = np.nan
-            liq3 = np.nan
-
-
-        # ====================================================
-        # FCF-MARGE
-        # ====================================================
-
-        if (
-            pd.notna(fcf)
-            and pd.notna(revenue)
-            and revenue != 0
-        ):
-            fcf_margin = (
-                fcf / revenue
-            ) * 100
-        else:
-            fcf_margin = np.nan
-
-
-        # ====================================================
-        # ROE
-        # ====================================================
-
-        if (
-            pd.notna(net_income)
-            and pd.notna(equity)
-            and equity > 0
-        ):
-            roe = (
-                net_income / equity
-            ) * 100
-        else:
-            roe = np.nan
-
-
-        # ====================================================
-        # DEBT / EQUITY
-        # ====================================================
-
-        if (
-            pd.notna(debt)
-            and pd.notna(equity)
-            and equity > 0
-        ):
-            debt_equity = (
-                debt / equity
-            ) * 100
-        else:
-            debt_equity = np.nan
-
-
-        # ====================================================
-        # JAHRESENDKURS
-        # ====================================================
-
-        year_end_price = get_year_end_price(
-            history,
-            year_number
+    if (
+        not pd.isna(dividend_per_share)
+        and not pd.isna(fcf_per_share)
+        and fcf_per_share != 0
+    ):
+        payout_fcf = (
+            dividend_per_share
+            / fcf_per_share
+            * 100
         )
 
 
-        # ====================================================
-        # HISTORISCHE MULTIPLES
-        # ====================================================
+    # --------------------------------------------------------
+    # Liquidität
+    # --------------------------------------------------------
 
-        kgv = calculate_multiple(
-            year_end_price,
-            eps
+    liquidity_1 = np.nan
+    liquidity_2 = np.nan
+    liquidity_3 = np.nan
+
+    if (
+        not pd.isna(cash)
+        and not pd.isna(current_liabilities)
+        and current_liabilities != 0
+    ):
+        liquidity_1 = (
+            cash
+            / current_liabilities
+            * 100
         )
 
-        kbv = calculate_multiple(
-            year_end_price,
-            bvps
+    if (
+        not pd.isna(cash)
+        and not pd.isna(receivables)
+        and not pd.isna(current_liabilities)
+        and current_liabilities != 0
+    ):
+        liquidity_2 = (
+            (cash + receivables)
+            / current_liabilities
+            * 100
         )
 
-        kcv = calculate_multiple(
-            year_end_price,
-            fcf_ps
+    if (
+        not pd.isna(current_assets)
+        and not pd.isna(current_liabilities)
+        and current_liabilities != 0
+    ):
+        liquidity_3 = (
+            current_assets
+            / current_liabilities
+            * 100
         )
 
-        kuv = calculate_multiple(
-            year_end_price,
-            revenue_ps
+
+    # --------------------------------------------------------
+    # FCF-Marge
+    # --------------------------------------------------------
+
+    fcf_margin = np.nan
+
+    if (
+        not pd.isna(fcf)
+        and not pd.isna(revenue)
+        and revenue != 0
+    ):
+        fcf_margin = (
+            fcf / revenue * 100
         )
 
 
-        rows.append({
+    # --------------------------------------------------------
+    # ROE
+    # --------------------------------------------------------
 
-            "Jahr": str(year_number),
+    roe = np.nan
 
-            "Umsatz (Mrd.)":
-                revenue / 1e9
-                if pd.notna(revenue)
-                else np.nan,
-
-            "Eigenkapital (Mrd.)":
-                equity / 1e9
-                if pd.notna(equity)
-                else np.nan,
-
-            "Free Cashflow (Mrd.)":
-                fcf / 1e9
-                if pd.notna(fcf)
-                else np.nan,
-
-            "EPS": eps,
-
-            "Jahresendkurs":
-                year_end_price,
-
-            "Buchwert/Aktie":
-                bvps,
-
-            "Umsatz/Aktie":
-                revenue_ps,
-
-            "Dividende/Aktie":
-                dividend_ps,
-
-            "Free Cashflow/Aktie":
-                fcf_ps,
-
-            "Ausschüttungsquote 1 (%)":
-                payout_1,
-
-            "Ausschüttungsquote 2 (%)":
-                payout_2,
-
-            "Liquidität 1 (%)":
-                liq1,
-
-            "Liquidität 2 (%)":
-                liq2,
-
-            "Liquidität 3 (%)":
-                liq3,
-
-            "FCF-Marge (%)":
-                fcf_margin,
-
-            "ROE (%)":
-                roe,
-
-            "Debt/Equity (%)":
-                debt_equity,
-
-            "KGV":
-                kgv,
-
-            "KBV":
-                kbv,
-
-            "KCV":
-                kcv,
-
-            "KUV":
-                kuv
-        })
+    if (
+        not pd.isna(net_income)
+        and not pd.isna(equity)
+        and equity != 0
+    ):
+        roe = (
+            net_income / equity * 100
+        )
 
 
-    df = pd.DataFrame(rows)
+    # --------------------------------------------------------
+    # Debt / Equity
+    # --------------------------------------------------------
+
+    debt_equity = np.nan
+
+    if (
+        not pd.isna(debt)
+        and not pd.isna(equity)
+        and equity != 0
+    ):
+        debt_equity = (
+            debt / equity * 100
+        )
 
 
-    # ========================================================
-    # TABELLE 1
-    # ========================================================
+    # --------------------------------------------------------
+    # Jahresendkurs
+    # --------------------------------------------------------
 
-    st.subheader(
-        "1️⃣ Umsatz, Eigenkapital, Free Cashflow, EPS und Kurs"
+    year_end_price = get_year_end_price(
+        history,
+        year
     )
 
-    table1 = df[
-        [
-            "Jahr",
-            "Umsatz (Mrd.)",
-            "Eigenkapital (Mrd.)",
-            "Free Cashflow (Mrd.)",
-            "EPS",
-            "Jahresendkurs"
-        ]
-    ]
+
+    # --------------------------------------------------------
+    # Historische Multiples
+    # --------------------------------------------------------
+
+    kgv = calculate_multiple(
+        year_end_price,
+        eps
+    )
+
+    kbv = calculate_multiple(
+        year_end_price,
+        book_value_per_share
+    )
+
+    kcv = calculate_multiple(
+        year_end_price,
+        fcf_per_share
+    )
+
+    kuv = calculate_multiple(
+        year_end_price,
+        revenue_per_share
+    )
+
+
+    # --------------------------------------------------------
+    # Tabellenzeilen
+    # --------------------------------------------------------
+
+    historical_rows.append({
+        "Jahr": year,
+        "Umsatz (Mrd.)": (
+            revenue / 1e9
+            if not pd.isna(revenue)
+            else np.nan
+        ),
+        "Eigenkapital (Mrd.)": (
+            equity / 1e9
+            if not pd.isna(equity)
+            else np.nan
+        ),
+        "Free Cashflow (Mrd.)": (
+            fcf / 1e9
+            if not pd.isna(fcf)
+            else np.nan
+        ),
+        "EPS": eps,
+        "Jahresendkurs": year_end_price
+    })
+
+
+    share_rows.append({
+        "Jahr": year,
+        "Buchwert/Aktie": book_value_per_share,
+        "Umsatz/Aktie": revenue_per_share,
+        "Dividende/Aktie": dividend_per_share,
+        "Free Cashflow/Aktie": fcf_per_share
+    })
+
+
+    payout_rows.append({
+        "Jahr": year,
+        "Ausschüttungsquote 1 (%)": payout_eps,
+        "Ausschüttungsquote 2 (%)": payout_fcf
+    })
+
+
+    liquidity_rows.append({
+        "Jahr": year,
+        "Liquidität 1 (%)": liquidity_1,
+        "Liquidität 2 (%)": liquidity_2,
+        "Liquidität 3 (%)": liquidity_3
+    })
+
+
+    quality_rows.append({
+        "Jahr": year,
+        "FCF-Marge (%)": fcf_margin,
+        "ROE (%)": roe,
+        "Debt/Equity (%)": debt_equity
+    })
+
+
+    valuation_rows.append({
+        "Jahr": year,
+        "KGV": kgv,
+        "KBV": kbv,
+        "KCV": kcv,
+        "KUV": kuv
+    })
+
+
+# ============================================================
+# DATAFRAMES
+# ============================================================
+
+historical_df = pd.DataFrame(historical_rows)
+share_df = pd.DataFrame(share_rows)
+payout_df = pd.DataFrame(payout_rows)
+liquidity_df = pd.DataFrame(liquidity_rows)
+quality_df = pd.DataFrame(quality_rows)
+valuation_df = pd.DataFrame(valuation_rows)
+
+
+# ============================================================
+# TABELLE 1
+# ============================================================
+
+st.subheader("1. Umsatz, Eigenkapital, Free Cashflow, EPS und Jahresendkurs")
+
+if not historical_df.empty:
+
+    display_df = historical_df.copy()
 
     st.dataframe(
-        table1.style.format(
-            precision=2,
-            na_rep="-"
-        ),
-        use_container_width=True
+        display_df.style.format({
+            "Umsatz (Mrd.)": "{:.2f}",
+            "Eigenkapital (Mrd.)": "{:.2f}",
+            "Free Cashflow (Mrd.)": "{:.2f}",
+            "EPS": "{:.2f}",
+            "Jahresendkurs": "{:.2f}"
+        }),
+        use_container_width=True,
+        hide_index=True
     )
 
 
-    # ========================================================
-    # TABELLE 2
-    # ========================================================
+# ============================================================
+# TABELLE 2
+# ============================================================
 
-    st.subheader(
-        "2️⃣ Werte je Aktie und Dividende"
-    )
+st.subheader("2. Kennzahlen je Aktie")
 
-    table2 = df[
-        [
-            "Jahr",
-            "Buchwert/Aktie",
-            "Umsatz/Aktie",
-            "Dividende/Aktie",
-            "Free Cashflow/Aktie"
-        ]
-    ]
+if not share_df.empty:
 
     st.dataframe(
-        table2.style.format(
-            precision=2,
-            na_rep="-"
-        ),
-        use_container_width=True
+        share_df.style.format({
+            "Buchwert/Aktie": "{:.2f}",
+            "Umsatz/Aktie": "{:.2f}",
+            "Dividende/Aktie": "{:.2f}",
+            "Free Cashflow/Aktie": "{:.2f}"
+        }),
+        use_container_width=True,
+        hide_index=True
     )
 
 
-    # ========================================================
-    # TABELLE 3
-    # ========================================================
+# ============================================================
+# TABELLE 3
+# ============================================================
 
-    st.subheader(
-        "3️⃣ Ausschüttungsquoten"
-    )
+st.subheader("3. Ausschüttungsquoten")
 
-    table3 = df[
-        [
-            "Jahr",
-            "Ausschüttungsquote 1 (%)",
-            "Ausschüttungsquote 2 (%)"
-        ]
-    ]
+if not payout_df.empty:
 
     st.dataframe(
-        table3.style.format(
-            precision=2,
-            na_rep="-"
-        ),
-        use_container_width=True
+        payout_df.style.format({
+            "Ausschüttungsquote 1 (%)": "{:.1f} %",
+            "Ausschüttungsquote 2 (%)": "{:.1f} %"
+        }),
+        use_container_width=True,
+        hide_index=True
     )
 
 
-    # ========================================================
-    # TABELLE 4
-    # ========================================================
+# ============================================================
+# TABELLE 4 – LIQUIDITÄT MIT AMPEL
+# ============================================================
 
-    st.subheader(
-        "4️⃣ Liquidität"
-    )
+st.subheader("4. Liquidität")
+
+if not liquidity_df.empty:
 
     liquidity_display = liquidity_df.copy()
 
-# Zahlen formatieren
-for col in [
-    "Liquidität 1 (%)",
-    "Liquidität 2 (%)",
-    "Liquidität 3 (%)"
-]:
-    if col in liquidity_display.columns:
-        liquidity_display[col] = liquidity_display[col].round(1)
+    # --------------------------------------------------------
+    # Styling
+    # --------------------------------------------------------
 
-# Styling für die drei Liquiditätsgrade
-styled_liquidity = (
-    liquidity_display.style
-    .map(
-        lambda value: color_liquidity(value, "L1"),
-        subset=["Liquidität 1 (%)"]
-    )
-    .map(
-        lambda value: color_liquidity(value, "L2"),
-        subset=["Liquidität 2 (%)"]
-    )
-    .map(
-        lambda value: color_liquidity(value, "L3"),
-        subset=["Liquidität 3 (%)"]
-    )
-    .format({
-        "Liquidität 1 (%)": "{:.1f} %",
-        "Liquidität 2 (%)": "{:.1f} %",
-        "Liquidität 3 (%)": "{:.1f} %"
-    })
-)
+    styled_liquidity = (
+        liquidity_display.style
 
-st.dataframe(
-    styled_liquidity,
-    use_container_width=True,
-    hide_index=True
-)
-
-# Legende
-st.markdown(
-    """
-    **Bewertung:**  
-    🔴 Schwach &nbsp;&nbsp; 🟡 Solide &nbsp;&nbsp; 🟢 Stark
-
-    | Kennzahl | 🔴 Schwach | 🟡 Solide | 🟢 Stark |
-    |---|---:|---:|---:|
-    | Liquidität 1. Grades | < 20 % | 20–30 % | > 30 % |
-    | Liquidität 2. Grades | < 100 % | 100–120 % | > 120 % |
-    | Liquidität 3. Grades | < 120 % | 120–150 % | > 150 % |
-    """,
-    unsafe_allow_html=True
-)
-
-
-    # ========================================================
-    # BRANCHENVERGLEICH
-    # ========================================================
-
-    st.subheader(
-        "5️⃣ Profitabilität und Verschuldung – Branchenvergleich"
-    )
-
-
-    # Peer-Unternehmen bestimmen
-
-    peer_tickers = INDUSTRY_PEERS.get(
-        ticker_symbol,
-        []
-    )
-
-
-    # Möglichkeit zur manuellen Anpassung
-    default_peers = ", ".join(
-        peer_tickers
-    )
-
-
-    peer_input = st.text_input(
-        "Vergleichsunternehmen für den Branchenvergleich "
-        "(Yahoo-Ticker, durch Komma getrennt)",
-        value=default_peers,
-        help=(
-            "Die Unternehmen werden für den Durchschnitt "
-            "der Branche verwendet. "
-            "Beispiel Toyota: 7267.T, 7201.T, 005380.KS, F, GM"
+        .map(
+            lambda value: color_liquidity(
+                value,
+                "L1"
+            ),
+            subset=["Liquidität 1 (%)"]
         )
+
+        .map(
+            lambda value: color_liquidity(
+                value,
+                "L2"
+            ),
+            subset=["Liquidität 2 (%)"]
+        )
+
+        .map(
+            lambda value: color_liquidity(
+                value,
+                "L3"
+            ),
+            subset=["Liquidität 3 (%)"]
+        )
+
+        .format({
+            "Liquidität 1 (%)": "{:.1f} %",
+            "Liquidität 2 (%)": "{:.1f} %",
+            "Liquidität 3 (%)": "{:.1f} %"
+        })
+    )
+
+    st.dataframe(
+        styled_liquidity,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.markdown(
+        """
+**Bewertung der Liquidität**
+
+🔴 **Schwach** &nbsp;&nbsp;
+🟡 **Solide** &nbsp;&nbsp;
+🟢 **Stark**
+
+| Kennzahl | 🔴 Schwach | 🟡 Solide | 🟢 Stark |
+|---|---:|---:|---:|
+| Liquidität 1. Grades | < 20 % | 20–30 % | > 30 % |
+| Liquidität 2. Grades | < 100 % | 100–120 % | > 120 % |
+| Liquidität 3. Grades | < 120 % | 120–150 % | > 150 % |
+"""
     )
 
 
-    peer_tickers = [
-        x.strip().upper()
-        for x in peer_input.split(",")
-        if x.strip()
-    ]
+# ============================================================
+# PEER AUS SIDEBAR
+# ============================================================
+
+default_peers = INDUSTRY_PEERS.get(
+    ticker_symbol,
+    []
+)
+
+peer_text_default = ", ".join(default_peers)
+
+peer_text = st.sidebar.text_input(
+    "Branchenvergleich – Peer-Ticker",
+    value=peer_text_default,
+    help=(
+        "Yahoo-Ticker durch Komma getrennt. "
+        "Beispiel: AAPL, MSFT, GOOGL"
+    )
+)
+
+peer_tickers = [
+    x.strip().upper()
+    for x in peer_text.split(",")
+    if x.strip()
+]
 
 
-    if peer_tickers:
+# ============================================================
+# PEER-DATEN LADEN
+# ============================================================
 
-        with st.spinner(
-            "Branchenvergleich wird geladen..."
-        ):
+peer_df = pd.DataFrame()
 
+if peer_tickers:
+
+    with st.spinner("Berechne Branchenvergleich ..."):
+
+        try:
             peer_df = get_peer_metrics(
                 tuple(peer_tickers)
             )
 
-    else:
-
-        peer_df = pd.DataFrame()
-
-
-    # ========================================================
-    # BRANCHENDURCHSCHNITT
-    # ========================================================
-
-    if (
-        peer_df is not None
-        and not peer_df.empty
-    ):
-
-        industry_avg = {
-
-            "FCF-Marge (%)":
-                peer_df["FCF-Marge (%)"]
-                .replace(
-                    [np.inf, -np.inf],
-                    np.nan
-                )
-                .mean(),
-
-            "ROE (%)":
-                peer_df["ROE (%)"]
-                .replace(
-                    [np.inf, -np.inf],
-                    np.nan
-                )
-                .mean(),
-
-            "Debt/Equity (%)":
-                peer_df["Debt/Equity (%)"]
-                .replace(
-                    [np.inf, -np.inf],
-                    np.nan
-                )
-                .mean()
-        }
-
-    else:
-
-        industry_avg = {
-            "FCF-Marge (%)": np.nan,
-            "ROE (%)": np.nan,
-            "Debt/Equity (%)": np.nan
-        }
+        except Exception:
+            peer_df = pd.DataFrame()
 
 
-    # ========================================================
-    # TABELLE 5
-    # ========================================================
+# ============================================================
+# BRANCHENDURCHSCHNITT
+# ============================================================
 
-    table5 = df[
-        [
-            "Jahr",
+peer_avg = {}
+
+if not peer_df.empty:
+
+    for col in [
+        "FCF-Marge (%)",
+        "ROE (%)",
+        "Debt/Equity (%)",
+        "KGV",
+        "KBV",
+        "KCV",
+        "KUV"
+    ]:
+
+        if col in peer_df.columns:
+
+            peer_avg[col] = safe_float(
+                peer_df[col].mean()
+            )
+
+
+# ============================================================
+# TABELLE 5
+# ============================================================
+
+st.subheader(
+    "5. FCF-Marge, ROE und Debt/Equity"
+)
+
+if not quality_df.empty:
+
+    quality_display = quality_df.copy()
+
+    if peer_avg:
+
+        quality_display["Branchen-Ø FCF-Marge"] = peer_avg.get(
             "FCF-Marge (%)",
+            np.nan
+        )
+
+        quality_display["Branchen-Ø ROE"] = peer_avg.get(
             "ROE (%)",
-            "Debt/Equity (%)"
-        ]
-    ].copy()
+            np.nan
+        )
 
+        quality_display["Branchen-Ø Debt/Equity"] = peer_avg.get(
+            "Debt/Equity (%)",
+            np.nan
+        )
 
-    # Branchen-Durchschnitt als zusätzliche Spalten
+    format_dict = {
+        "FCF-Marge (%)": "{:.1f} %",
+        "ROE (%)": "{:.1f} %",
+        "Debt/Equity (%)": "{:.1f} %"
+    }
 
-    table5[
-        "Branche Ø FCF-Marge (%)"
-    ] = industry_avg[
-        "FCF-Marge (%)"
-    ]
+    if "Branchen-Ø FCF-Marge" in quality_display.columns:
+        format_dict["Branchen-Ø FCF-Marge"] = "{:.1f} %"
 
+    if "Branchen-Ø ROE" in quality_display.columns:
+        format_dict["Branchen-Ø ROE"] = "{:.1f} %"
 
-    table5[
-        "Branche Ø ROE (%)"
-    ] = industry_avg[
-        "ROE (%)"
-    ]
-
-
-    table5[
-        "Branche Ø Debt/Equity (%)"
-    ] = industry_avg[
-        "Debt/Equity (%)"
-    ]
-
+    if "Branchen-Ø Debt/Equity" in quality_display.columns:
+        format_dict["Branchen-Ø Debt/Equity"] = "{:.1f} %"
 
     st.dataframe(
-        table5.style.format(
-            precision=2,
-            na_rep="-"
-        ),
-        use_container_width=True
+        quality_display.style.format(format_dict),
+        use_container_width=True,
+        hide_index=True
     )
 
 
-    if (
-        peer_df is not None
-        and not peer_df.empty
-    ):
+# ============================================================
+# TABELLE 6
+# ============================================================
 
-        st.caption(
-            "Branchen-Durchschnitt berechnet aus: "
-            + ", ".join(peer_tickers)
-        )
+st.subheader("6. Historische Bewertung")
 
-    else:
+if not valuation_df.empty:
 
-        st.warning(
-            "Für den Branchenvergleich konnten keine "
-            "ausreichenden Vergleichsdaten geladen werden."
-        )
+    valuation_display = valuation_df.copy()
 
+    if peer_avg:
 
-    # ========================================================
-    # TABELLE 6
-    # ========================================================
-
-    st.subheader(
-        "6️⃣ Historische Bewertung – KGV, KBV, KCV und KUV"
-    )
-
-
-    table6 = df[
-        [
-            "Jahr",
+        valuation_display["Branchen-Ø KGV"] = peer_avg.get(
             "KGV",
+            np.nan
+        )
+
+        valuation_display["Branchen-Ø KBV"] = peer_avg.get(
             "KBV",
+            np.nan
+        )
+
+        valuation_display["Branchen-Ø KCV"] = peer_avg.get(
             "KCV",
-            "KUV"
-        ]
-    ].copy()
-
-
-    # Optional zusätzlich Branchenvergleich
-    # für Bewertung
-
-    if (
-        peer_df is not None
-        and not peer_df.empty
-    ):
-
-        table6[
-            "Branche Ø KGV"
-        ] = (
-            peer_df["KGV"]
-            .replace(
-                [np.inf, -np.inf],
-                np.nan
-            )
-            .mean()
+            np.nan
         )
 
-        table6[
-            "Branche Ø KBV"
-        ] = (
-            peer_df["KBV"]
-            .replace(
-                [np.inf, -np.inf],
-                np.nan
-            )
-            .mean()
+        valuation_display["Branchen-Ø KUV"] = peer_avg.get(
+            "KUV",
+            np.nan
         )
 
-        table6[
-            "Branche Ø KCV"
-        ] = (
-            peer_df["KCV"]
-            .replace(
-                [np.inf, -np.inf],
-                np.nan
-            )
-            .mean()
-        )
+    format_dict = {
+        "KGV": "{:.2f}",
+        "KBV": "{:.2f}",
+        "KCV": "{:.2f}",
+        "KUV": "{:.2f}"
+    }
 
-        table6[
-            "Branche Ø KUV"
-        ] = (
-            peer_df["KUV"]
-            .replace(
-                [np.inf, -np.inf],
-                np.nan
-            )
-            .mean()
-        )
+    if "Branchen-Ø KGV" in valuation_display.columns:
+        format_dict["Branchen-Ø KGV"] = "{:.2f}"
 
+    if "Branchen-Ø KBV" in valuation_display.columns:
+        format_dict["Branchen-Ø KBV"] = "{:.2f}"
+
+    if "Branchen-Ø KCV" in valuation_display.columns:
+        format_dict["Branchen-Ø KCV"] = "{:.2f}"
+
+    if "Branchen-Ø KUV" in valuation_display.columns:
+        format_dict["Branchen-Ø KUV"] = "{:.2f}"
 
     st.dataframe(
-        table6.style.format(
-            precision=2,
-            na_rep="-"
-        ),
-        use_container_width=True
+        valuation_display.style.format(format_dict),
+        use_container_width=True,
+        hide_index=True
     )
 
 
-    # ========================================================
-    # AKTUELLE BEWERTUNG
-    # ========================================================
+# ============================================================
+# AKTUELLE BEWERTUNG
+# ============================================================
 
-    st.subheader(
-        "🔎 Aktuelle Bewertung"
+st.subheader("📊 Aktuelle Bewertung")
+
+if not historical_df.empty and not share_df.empty:
+
+    latest_hist = historical_df.iloc[0]
+    latest_share = share_df.iloc[0]
+
+    current_eps = safe_float(
+        latest_hist["EPS"]
     )
 
+    current_book_value = safe_float(
+        latest_share["Buchwert/Aktie"]
+    )
 
-    latest = df.iloc[0]
+    current_fcf_per_share = safe_float(
+        latest_share["Free Cashflow/Aktie"]
+    )
 
-
-    current_eps = latest["EPS"]
-    current_bvps = latest["Buchwert/Aktie"]
-    current_fcf_ps = latest["Free Cashflow/Aktie"]
-    current_revenue_ps = latest["Umsatz/Aktie"]
-
+    current_revenue_per_share = safe_float(
+        latest_share["Umsatz/Aktie"]
+    )
 
     current_kgv = calculate_multiple(
         current_price,
@@ -1870,632 +1735,341 @@ st.markdown(
 
     current_kbv = calculate_multiple(
         current_price,
-        current_bvps
+        current_book_value
     )
 
     current_kcv = calculate_multiple(
         current_price,
-        current_fcf_ps
+        current_fcf_per_share
     )
 
     current_kuv = calculate_multiple(
         current_price,
-        current_revenue_ps
+        current_revenue_per_share
     )
 
+    valuation_cols = st.columns(4)
 
-    c1, c2, c3, c4 = st.columns(4)
+    with valuation_cols[0]:
 
-
-    with c1:
         st.metric(
             "Aktuelles KGV",
-            f"{current_kgv:.2f}"
-            if pd.notna(current_kgv)
-            else "-"
+            (
+                f"{current_kgv:.2f}"
+                if not pd.isna(current_kgv)
+                else "–"
+            )
         )
 
+    with valuation_cols[1]:
 
-    with c2:
         st.metric(
             "Aktuelles KBV",
-            f"{current_kbv:.2f}"
-            if pd.notna(current_kbv)
-            else "-"
+            (
+                f"{current_kbv:.2f}"
+                if not pd.isna(current_kbv)
+                else "–"
+            )
         )
 
+    with valuation_cols[2]:
 
-    with c3:
         st.metric(
             "Aktuelles KCV",
-            f"{current_kcv:.2f}"
-            if pd.notna(current_kcv)
-            else "-"
+            (
+                f"{current_kcv:.2f}"
+                if not pd.isna(current_kcv)
+                else "–"
+            )
         )
 
+    with valuation_cols[3]:
 
-    with c4:
         st.metric(
             "Aktuelles KUV",
-            f"{current_kuv:.2f}"
-            if pd.notna(current_kuv)
-            else "-"
+            (
+                f"{current_kuv:.2f}"
+                if not pd.isna(current_kuv)
+                else "–"
+            )
         )
 
 
-    # ========================================================
-    # GRAHAM
-    # ========================================================
+# ============================================================
+# GRAHAM-BEWERTUNG
+# ============================================================
 
-    st.subheader(
-        "📐 Bewertung nach Benjamin Graham"
+st.subheader("🧮 Graham-Bewertung")
+
+if not historical_df.empty and not share_df.empty:
+
+    eps_values = pd.to_numeric(
+        historical_df["EPS"],
+        errors="coerce"
+    ).dropna()
+
+    book_values = pd.to_numeric(
+        share_df["Buchwert/Aktie"],
+        errors="coerce"
+    ).dropna()
+
+    if not eps_values.empty and not book_values.empty:
+
+        avg_eps = eps_values.mean()
+        avg_book_value = book_values.mean()
+
+        graham_value = calculate_graham(
+            avg_eps,
+            avg_book_value
+        )
+
+        if not pd.isna(graham_value):
+
+            graham_margin_price = (
+                graham_value
+                * (1 - margin_of_safety)
+            )
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.metric(
+                    "Graham-Wert",
+                    f"{graham_value:.2f}"
+                )
+
+            with col2:
+                st.metric(
+                    "Sicherheitsmarge",
+                    f"{margin_of_safety * 100:.0f} %"
+                )
+
+            with col3:
+                st.metric(
+                    "Graham-Wert nach Sicherheitsmarge",
+                    f"{graham_margin_price:.2f}"
+                )
+
+
+# ============================================================
+# DCF
+# ============================================================
+
+st.subheader("💰 DCF-Bewertung")
+
+if not historical_df.empty:
+
+    latest_fcf = safe_float(
+        historical_df.iloc[0]["Free Cashflow (Mrd.)"]
     )
 
+    if not pd.isna(latest_fcf):
 
-    avg_eps = df["EPS"].mean()
-    avg_bvps = df["Buchwert/Aktie"].mean()
+        # Rückrechnung von Mrd. auf absoluten Wert
+        latest_fcf_absolute = latest_fcf * 1e9
 
+        dcf_value = calculate_dcf(
+            latest_fcf_absolute,
+            fcf_growth,
+            wacc,
+            terminal_growth,
+            forecast_years
+        )
 
-    graham = calculate_graham(
-        avg_eps,
-        avg_bvps
-    )
+        if not pd.isna(dcf_value):
 
-
-    if pd.notna(graham):
-
-        difference = (
-            (graham - current_price)
-            / current_price
-        ) * 100
-
-
-        c1, c2, c3 = st.columns(3)
-
-
-        with c1:
             st.metric(
-                "Graham-Wert",
-                f"{graham:.2f} {currency}"
+                "Unternehmenswert nach DCF",
+                f"{dcf_value / 1e9:.2f} Mrd."
+            )
+
+            st.caption(
+                f"Annahmen: FCF-Wachstum "
+                f"{fcf_growth * 100:.1f} %, "
+                f"WACC {wacc * 100:.1f} %, "
+                f"Terminal Growth "
+                f"{terminal_growth * 100:.1f} %"
             )
 
 
-        with c2:
-            st.metric(
-                "Aktueller Kurs",
-                f"{current_price:.2f} {currency}"
-            )
+# ============================================================
+# DIVIDENDENANALYSE
+# ============================================================
 
+st.subheader("💶 Dividendenanalyse")
 
-        with c3:
-            st.metric(
-                "Abweichung",
-                f"{difference:+.1f}%"
-            )
+if not share_df.empty:
 
-    else:
+    dividend_values = pd.to_numeric(
+        share_df["Dividende/Aktie"],
+        errors="coerce"
+    ).dropna()
 
-        st.warning(
-            "Graham-Wert kann nicht berechnet werden, "
-            "weil EPS oder Buchwert nicht positiv sind."
-        )
+    if not dividend_values.empty:
 
+        latest_dividend = dividend_values.iloc[0]
 
-    # ========================================================
-    # DCF
-    # ========================================================
-
-    st.subheader(
-        "💰 DCF-Bewertung"
-    )
-
-
-    latest_fcf = (
-        latest["Free Cashflow (Mrd.)"]
-        * 1e9
-    )
-
-
-    shares_now = safe_float(
-        info.get(
-            "sharesOutstanding"
-        )
-    )
-
-
-    if pd.isna(shares_now):
-
-        latest_bs_column = (
-            balance_sheet.columns[0]
-            if (
-                balance_sheet is not None
-                and not balance_sheet.empty
-            )
-            else None
-        )
-
-        if latest_bs_column is not None:
-
-            shares_now = get_row_value(
-                balance_sheet,
-                [
-                    "Ordinary Shares Number",
-                    "Share Issued"
-                ],
-                latest_bs_column
-            )
-
-
-    net_debt = 0.0
-
-
-    if (
-        balance_sheet is not None
-        and not balance_sheet.empty
-    ):
-
-        latest_bs_column = (
-            balance_sheet.columns[0]
-        )
-
-        cash_now = get_row_value(
-            balance_sheet,
-            [
-                "Cash And Cash Equivalents",
-                "Cash Cash Equivalents And Short Term Investments"
-            ],
-            latest_bs_column
-        )
-
-        debt_now = get_row_value(
-            balance_sheet,
-            [
-                "Total Debt",
-                "Total Debt And Capital Lease Obligation"
-            ],
-            latest_bs_column
-        )
+        dividend_yield = np.nan
 
         if (
-            pd.notna(cash_now)
-            and pd.notna(debt_now)
+            not pd.isna(current_price)
+            and current_price != 0
         ):
+            dividend_yield = (
+                latest_dividend
+                / current_price
+                * 100
+            )
 
-            net_debt = (
-                debt_now - cash_now
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            st.metric(
+                "Dividende/Aktie",
+                f"{latest_dividend:.2f}"
+            )
+
+        with col2:
+
+            st.metric(
+                "Dividendenrendite",
+                (
+                    f"{dividend_yield:.2f} %"
+                    if not pd.isna(dividend_yield)
+                    else "–"
+                )
             )
 
 
-    dcf = calculate_dcf(
-        latest_fcf,
-        shares_now,
-        net_debt,
-        growth_rate,
-        wacc,
-        terminal_growth,
-        forecast_years
+# ============================================================
+# FUNDAMENTAL SCORE
+# ============================================================
+
+st.subheader("⭐ Fundamentale Kennzahlen")
+
+score_values = []
+
+if not quality_df.empty:
+
+    latest_quality = quality_df.iloc[0]
+
+    fcf_margin_latest = safe_float(
+        latest_quality["FCF-Marge (%)"]
     )
 
+    roe_latest = safe_float(
+        latest_quality["ROE (%)"]
+    )
 
-    if pd.notna(dcf):
+    debt_equity_latest = safe_float(
+        latest_quality["Debt/Equity (%)"]
+    )
 
-        dcf_difference = (
-            (dcf - current_price)
-            / current_price
-        ) * 100
-
-
-        price_with_margin = (
-            dcf
-            * (
-                1
-                - margin_of_safety / 100
+    if not pd.isna(fcf_margin_latest):
+        score_values.append(
+            calculate_growth_score(
+                fcf_margin_latest
             )
         )
 
-
-        c1, c2, c3 = st.columns(3)
-
-
-        with c1:
-            st.metric(
-                "DCF-Wert",
-                f"{dcf:.2f} {currency}"
+    if not pd.isna(roe_latest):
+        score_values.append(
+            calculate_growth_score(
+                roe_latest
             )
+        )
+
+    if not pd.isna(debt_equity_latest):
+
+        if debt_equity_latest < 50:
+            score_values.append(5)
+
+        elif debt_equity_latest < 100:
+            score_values.append(4)
+
+        elif debt_equity_latest < 150:
+            score_values.append(3)
+
+        elif debt_equity_latest < 200:
+            score_values.append(2)
+
+        else:
+            score_values.append(1)
 
 
-        with c2:
-            st.metric(
-                "Upside / Downside",
-                f"{dcf_difference:+.1f}%"
-            )
+if score_values:
 
+    fundamental_score = (
+        sum(score_values)
+        / len(score_values)
+    )
 
-        with c3:
-            st.metric(
-                "DCF mit Sicherheitsmarge",
-                f"{price_with_margin:.2f} {currency}"
-            )
+    if fundamental_score >= 4.5:
+        score_label = "Sehr attraktiv"
+
+    elif fundamental_score >= 3.5:
+        score_label = "Attraktiv"
+
+    elif fundamental_score >= 2.5:
+        score_label = "Ausgeglichen"
+
+    elif fundamental_score >= 1.5:
+        score_label = "Schwach"
 
     else:
+        score_label = "Sehr schwach"
 
-        st.warning(
-            "DCF konnte nicht berechnet werden."
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric(
+            "Fundamentaler Score",
+            f"{fundamental_score:.1f} / 5"
+        )
+
+    with col2:
+        st.metric(
+            "Einordnung",
+            score_label
         )
 
 
-    # ========================================================
-    # DIVIDENDENANALYSE
-    # ========================================================
+# ============================================================
+# BRANCHENVERGLEICH ANZEIGEN
+# ============================================================
 
-    st.subheader(
-        "💶 Dividendenanalyse"
-    )
+if not peer_df.empty:
 
+    st.subheader("🏭 Unternehmen im Branchenvergleich")
 
-    dividend_table = df[
-        [
-            "Jahr",
-            "Dividende/Aktie",
-            "Ausschüttungsquote 1 (%)",
-            "Ausschüttungsquote 2 (%)"
-        ]
-    ]
-
+    peer_display = peer_df.copy()
 
     st.dataframe(
-        dividend_table.style.format(
-            precision=2,
-            na_rep="-"
-        ),
-        use_container_width=True
+        peer_display.style.format({
+            "FCF-Marge (%)": "{:.1f} %",
+            "ROE (%)": "{:.1f} %",
+            "Debt/Equity (%)": "{:.1f} %",
+            "KGV": "{:.2f}",
+            "KBV": "{:.2f}",
+            "KCV": "{:.2f}",
+            "KUV": "{:.2f}"
+        }),
+        use_container_width=True,
+        hide_index=True
     )
 
 
-    # ========================================================
-    # FUNDAMENTALER SCORE
-    # ========================================================
-
-    st.subheader(
-        "🏆 Fundamentaler Score"
-    )
-
-
-    score_revenue = calculate_growth_score(
-        df["Umsatz (Mrd.)"],
-        10
-    )
-
-    score_eps = calculate_growth_score(
-        df["EPS"],
-        10
-    )
-
-    score_fcf = calculate_growth_score(
-        df["Free Cashflow (Mrd.)"],
-        10
-    )
-
-
-    fcf_margin = latest[
-        "FCF-Marge (%)"
-    ]
-
-
-    if pd.isna(fcf_margin):
-        score_fcf_margin = 0
-    elif fcf_margin >= 25:
-        score_fcf_margin = 10
-    elif fcf_margin >= 20:
-        score_fcf_margin = 9
-    elif fcf_margin >= 15:
-        score_fcf_margin = 8
-    elif fcf_margin >= 10:
-        score_fcf_margin = 6
-    elif fcf_margin >= 5:
-        score_fcf_margin = 4
-    elif fcf_margin >= 0:
-        score_fcf_margin = 2
-    else:
-        score_fcf_margin = 0
-
-
-    roe = latest["ROE (%)"]
-
-
-    if pd.isna(roe):
-        score_roe = 0
-    elif roe >= 25:
-        score_roe = 10
-    elif roe >= 20:
-        score_roe = 9
-    elif roe >= 15:
-        score_roe = 8
-    elif roe >= 10:
-        score_roe = 6
-    elif roe >= 5:
-        score_roe = 4
-    else:
-        score_roe = 0
-
-
-    debt_equity = latest[
-        "Debt/Equity (%)"
-    ]
-
-
-    if pd.isna(debt_equity):
-        score_debt = 0
-    elif debt_equity <= 20:
-        score_debt = 10
-    elif debt_equity <= 50:
-        score_debt = 9
-    elif debt_equity <= 100:
-        score_debt = 7
-    elif debt_equity <= 150:
-        score_debt = 5
-    elif debt_equity <= 250:
-        score_debt = 3
-    else:
-        score_debt = 0
-
-
-    liquidity = latest[
-        "Liquidität 3 (%)"
-    ]
-
-
-    if pd.isna(liquidity):
-        score_liquidity = 0
-    elif liquidity >= 200:
-        score_liquidity = 5
-    elif liquidity >= 150:
-        score_liquidity = 4
-    elif liquidity >= 100:
-        score_liquidity = 3
-    elif liquidity >= 75:
-        score_liquidity = 1
-    else:
-        score_liquidity = 0
-
-
-    score_dividend = 0
-
-    payout = latest[
-        "Ausschüttungsquote 1 (%)"
-    ]
-
-
-    if (
-        pd.notna(payout)
-        and 20 <= payout <= 60
-    ):
-        score_dividend += 3
-    elif (
-        pd.notna(payout)
-        and 10 <= payout <= 75
-    ):
-        score_dividend += 2
-    elif (
-        pd.notna(payout)
-        and 0 <= payout <= 100
-    ):
-        score_dividend += 1
-
-
-    dividends_clean = (
-        df["Dividende/Aktie"]
-        .replace(
-            [np.inf, -np.inf],
-            np.nan
-        )
-        .dropna()
-    )
-
-
-    if len(dividends_clean) >= 2:
-
-        if (
-            dividends_clean.iloc[0]
-            > dividends_clean.iloc[-1]
-        ):
-            score_dividend += 2
-
-
-    score_dividend = min(
-        score_dividend,
-        5
-    )
-
-
-    score_historical = 0
-
-
-    score_historical += calculate_valuation_score(
-        current_kgv,
-        df["KGV"].replace(
-            [np.inf, -np.inf],
-            np.nan
-        ).mean(),
-        2.5
-    )
-
-
-    score_historical += calculate_valuation_score(
-        current_kcv,
-        df["KCV"].replace(
-            [np.inf, -np.inf],
-            np.nan
-        ).mean(),
-        2.5
-    )
-
-
-    score_historical += calculate_valuation_score(
-        current_kbv,
-        df["KBV"].replace(
-            [np.inf, -np.inf],
-            np.nan
-        ).mean(),
-        2.5
-    )
-
-
-    score_historical += calculate_valuation_score(
-        current_kuv,
-        df["KUV"].replace(
-            [np.inf, -np.inf],
-            np.nan
-        ).mean(),
-        2.5
-    )
-
-
-    score_dcf = 0
-
-
-    if pd.notna(dcf):
-
-        dcf_diff = (
-            (dcf - current_price)
-            / current_price
-        ) * 100
-
-
-        if dcf_diff >= 30:
-            score_dcf = 10
-        elif dcf_diff >= 20:
-            score_dcf = 9
-        elif dcf_diff >= 10:
-            score_dcf = 8
-        elif dcf_diff >= 0:
-            score_dcf = 7
-        elif dcf_diff >= -10:
-            score_dcf = 5
-        elif dcf_diff >= -20:
-            score_dcf = 3
-
-
-    total_score = (
-        score_revenue
-        + score_eps
-        + score_fcf
-        + score_fcf_margin
-        + score_roe
-        + score_debt
-        + score_liquidity
-        + score_dividend
-        + score_historical
-        + score_dcf
-    )
-
-
-    max_score = 90
-
-
-    normalized_score = (
-        total_score / max_score
-    ) * 100
-
-
-    normalized_score = min(
-        max(
-            normalized_score,
-            0
-        ),
-        100
-    )
-
-
-    if normalized_score >= 85:
-        rating = "Sehr attraktiv"
-    elif normalized_score >= 70:
-        rating = "Attraktiv"
-    elif normalized_score >= 55:
-        rating = "Neutral"
-    elif normalized_score >= 40:
-        rating = "Eher unattraktiv"
-    else:
-        rating = "Unattraktiv"
-
-
-    c1, c2 = st.columns(2)
-
-
-    with c1:
-        st.metric(
-            "Gesamtscore",
-            f"{normalized_score:.1f} / 100"
-        )
-
-
-    with c2:
-        st.metric(
-            "Einschätzung",
-            rating
-        )
-
-
-    score_table = pd.DataFrame({
-
-        "Kriterium": [
-            "Umsatzwachstum",
-            "EPS-Wachstum",
-            "FCF-Wachstum",
-            "FCF-Marge",
-            "ROE",
-            "Verschuldung",
-            "Liquidität",
-            "Dividendenqualität",
-            "Historische Bewertung",
-            "DCF"
-        ],
-
-        "Punkte": [
-            score_revenue,
-            score_eps,
-            score_fcf,
-            score_fcf_margin,
-            score_roe,
-            score_debt,
-            score_liquidity,
-            score_dividend,
-            score_historical,
-            score_dcf
-        ],
-
-        "Maximum": [
-            10,
-            10,
-            10,
-            10,
-            10,
-            10,
-            5,
-            5,
-            10,
-            10
-        ]
-    })
-
-
-    st.dataframe(
-        score_table.style.format(
-            precision=1
-        ),
-        use_container_width=True
-    )
-
-
-    # ========================================================
-    # HINWEIS
-    # ========================================================
-
-    st.divider()
-
-    st.caption(
-        "⚠️ Hinweis: Dieses Tool dient ausschließlich "
-        "der Analyse und stellt keine Anlageberatung dar. "
-        "Yahoo-Finance-Daten können verzögert, "
-        "unvollständig oder fehlerhaft sein."
-    )
+# ============================================================
+# HINWEISE
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "Hinweis: Die Daten stammen von Yahoo Finance. "
+    "Historische Jahresendkurse entsprechen dem letzten verfügbaren "
+    "Börsenhandelstag des jeweiligen Kalenderjahres. "
+    "Branchen-Durchschnittswerte basieren auf den in der Seitenleiste "
+    "hinterlegten Vergleichsunternehmen."
+)
