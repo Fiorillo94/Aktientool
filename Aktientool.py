@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -2463,4 +2462,3 @@ if user_input:
         "Yahoo-Finance-Daten können verzögert, "
         "unvollständig oder fehlerhaft sein."
     )
-```
